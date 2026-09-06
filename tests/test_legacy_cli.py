@@ -300,7 +300,8 @@ def test_handle_callback_slow_success_is_not_resent(monkeypatch):
     The old ``urlopen(url, timeout=2)`` timed out during finish_task, retried,
     and hit made.php after it had already deleted the channel key -> the
     ``no such channel: ok`` error. The retry must not happen: the request is
-    given the full 30s (PHP ``--connect-timeout 2 --max-time 30`` parity).
+    given the full read window (PHP ``--connect-timeout 2 --max-time 30``
+    parity, scaled up with the map's page count).
     """
     for env in ("HTTPS_PROXY", "http_proxy", "HTTP_PROXY"):
         monkeypatch.delenv(env, raising=False)
@@ -308,10 +309,56 @@ def test_handle_callback_slow_success_is_not_resent(monkeypatch):
     try:
         url = f"http://127.0.0.1:{srv.server_port}/twmap/api/made.php"
         args = _callback_args(url)
-        cli._handle_callback(args)  # must not raise
+        cli._handle_callback(args, num_pages=10)  # must not raise
         assert _SlowRecorder.calls == 1  # exactly once, no duplicate callback
     finally:
         srv.shutdown()
+
+
+def test_handle_callback_timeout_scales_with_pages(monkeypatch, tmp_path):
+    """The made.php wait must grow with the map's total PDF pages.
+
+    30s is not enough for a 10-page map; the read timeout is ``30 + 6*pages``
+    (10 pages -> 90s), mirrored into the ``{prefix}.cmd`` curl line and passed
+    as the per-attempt read timeout. A single attempt suffices since the
+    success arrives within the scaled window.
+    """
+    for env in ("HTTPS_PROXY", "http_proxy", "HTTP_PROXY"):
+        monkeypatch.delenv(env, raising=False)
+
+    captured: dict[str, float] = {}
+
+    def _fake_get(url, read_timeout, connect_timeout):
+        captured["read_timeout"] = read_timeout
+        captured["connect_timeout"] = connect_timeout
+        return 200, b"<h1>done</h1>"
+
+    monkeypatch.setattr(cli, "_callback_get", _fake_get)
+    outcmd = tmp_path / "out.cmd"
+    args = _callback_args("http://127.0.0.1:1/twmap/api/made.php")
+    cli._handle_callback(args, outcmd=outcmd, num_pages=10)
+
+    assert captured["read_timeout"] == 90.0
+    assert captured["connect_timeout"] == 2.0
+    cmd_text = outcmd.read_text(encoding="utf-8")
+    assert "--max-time 90" in cmd_text
+
+
+def test_handle_callback_default_timeout_is_30(monkeypatch, tmp_path):
+    """Without a page count the plain 30s PHP-parity timeout is kept."""
+    captured: dict[str, float] = {}
+
+    def _fake_get(url, read_timeout, connect_timeout):
+        captured["read_timeout"] = read_timeout
+        return 200, b"ok"
+
+    monkeypatch.setattr(cli, "_callback_get", _fake_get)
+    outcmd = tmp_path / "out.cmd"
+    args = _callback_args("http://127.0.0.1:1/twmap/api/made.php")
+    cli._handle_callback(args, outcmd=outcmd)
+
+    assert captured["read_timeout"] == 30.0
+    assert "--max-time 30" in outcmd.read_text(encoding="utf-8")
 
 
 # --------------------------------------------------------------------------

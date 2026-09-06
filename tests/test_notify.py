@@ -159,8 +159,48 @@ def test_cmd_make_emits_progress_steps(tmp_path, monkeypatch):
         assert "step:start" in steps
         assert any(s.startswith("step:download") for s in steps)
         assert "step:export" in steps
+        assert any(s.startswith("step:split:") for s in steps), (
+            f"expected a step:split milestone, got {steps}"
+        )
+        # Per-page split percent bumps land before the final 100%.
+        assert 80 in pcts, f"expected a split-phase ps%80 bump, got {pcts}"
         assert pcts and pcts[-1] == 100, f"expected end at 100, got {pcts}"
         assert pcts == sorted(pcts), f"progress not monotonic: {pcts}"
     finally:
         server.stop()
         logging.disable(logging.NOTSET)
+
+
+def test_cmd_make_writes_input_params_to_logfile(tmp_path, monkeypatch):
+    import logging
+
+    import mapgen.stitcher as stitcher
+
+    monkeypatch.setattr(stitcher, "build_base_image", _fake_base_image)
+
+    out = tmp_path / "out"
+    logfile = tmp_path / "job.log"
+    args = cli.build_parser().parse_args(
+        [
+            "make",
+            "--region",
+            "250000,2743650,1,1,TWD67",
+            "--output",
+            str(out),
+            "--map-type",
+            "2016",
+            "--tmpdir",
+            str(out),
+            "--logfile",
+            str(logfile),
+        ]
+    )
+    cli.cmd_make(args)
+
+    text = logfile.read_text(encoding="utf-8")
+    # Raw invocation line (PHP $cmd parity) plus one line per parsed option.
+    assert "Invocation:" in text
+    assert "region = " in text
+    assert "map_type = 2016" in text
+    assert "output = " in text
+    logging.disable(logging.NOTSET)

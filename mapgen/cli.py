@@ -253,6 +253,21 @@ def cmd_make(args) -> None:
         fh = logging.FileHandler(args.logfile)
         fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
         logger.addHandler(fh)
+        # Mirror PHP: record the job's input parameters in the log file (raw
+        # invocation line plus one line per parsed option). These go straight
+        # through the handler so they always land in the file, independent of
+        # the logger's effective level.
+        def _log_record(message: str) -> None:
+            rec = logger.makeRecord(
+                logger.name, logging.INFO, "", 0, message, (), None
+            )
+            fh.handle(rec)
+
+        _log_record(f"Invocation: {' '.join(sys.argv)}")
+        for key, value in sorted(vars(args).items()):
+            if key == "func":
+                continue
+            _log_record(f"  {key} = {value}")
     if getattr(args, "agent", None):
         logger.info("Agent %s Roger that ^_^", args.agent.strip())
 
@@ -357,8 +372,10 @@ def cmd_make(args) -> None:
 
         # Mirror PHP: register the map with the frontend (api/made.php) before
         # declaring 100% done. On failure notifier.error() runs + nonzero exit,
-        # so the queue worker releases the job for a retry.
-        _handle_callback(args, outcmd=outcmd)
+        # so the queue worker releases the job for a retry. The made.php
+        # handler spends time proportional to the number of PDF pages, so
+        # scale the callback wait by the total page count.
+        _handle_callback(args, outcmd=outcmd, num_pages=sum(outinfo["count"]))
         _report(notifier, "ps%100")
 
     except Exception as exc:  # noqa: BLE001
@@ -422,7 +439,8 @@ def _callback_get(
 
     Connects within ``connect_timeout`` (fast-fail on dead hosts), then once
     connected gives the request up to ``read_timeout`` to complete — mirrors
-    PHP's ``curl --connect-timeout 2 --max-time 30``.
+    PHP's ``curl --connect-timeout 2 --max-time 30`` (the caller may scale
+    ``read_timeout`` up with the map size).
 
     Returns ``(status, body)`` for any HTTP response; raises ``OSError`` on
     network failures and ``_CallbackHttpError`` for HTTP status >= 400.
@@ -462,7 +480,7 @@ def _callback_get(
     return resp.status, body
 
 
-def _handle_callback(args, outcmd: Path | None = None) -> None:
+def _handle_callback(args, outcmd: Path | None = None, num_pages: int = 0) -> None:
     """Invoke the frontend callback (api/made.php) when the map is done.
 
     Mirrors the PHP ``curl --fail-with-body --connect-timeout 2 --max-time 30
@@ -470,12 +488,14 @@ def _handle_callback(args, outcmd: Path | None = None) -> None:
     agent=<agent>``. The equivalent curl command is appended to ``outcmd``
     (the ``{prefix}.cmd`` file) for later debugging, exactly like PHP writes
     it. Timeouts mirror curl: a 2s *connect* limit, but a connected request is
-    given the full 30s to finish, so a made.php still busy running
+    given the full read window to finish, so a made.php still busy running
     ``finish_task`` (sleep + DB + migrate) is never abandoned mid-flight.
     Abandoning it would re-send the same ``status=ok``, which arrives only
     *after* the first call already deleted the channel key -> made.php's
-    "no such channel: ok". Like curl ``--retry``, only transient errors
-    (connection) and 5xx are retried within the 30s deadline; a 4xx
+    "no such channel: ok". Because made.php's work scales with the number of
+    PDF pages, the wait grows with ``num_pages`` (base 30s + 6s/page);
+    default ``0`` keeps the plain 30s. Like curl ``--retry``, only transient
+    errors (connection) and 5xx are retried within the deadline; a 4xx
     (e.g. made.php "no such channel" when the channel key was already
     consumed) is treated as final, since retrying a dead channel can never
     succeed. Raises on final failure so the caller exits nonzero.
@@ -487,6 +507,7 @@ def _handle_callback(args, outcmd: Path | None = None) -> None:
     callback = getattr(args, "callback", None)
     if not callback:
         return
+    read_timeout = 30.0 + 6.0 * max(0, num_pages)
     channel = _extract_channel(args)
     params_str = " ".join(sys.argv)
     url = (
@@ -501,7 +522,8 @@ def _handle_callback(args, outcmd: Path | None = None) -> None:
     # Mirror the PHP file_put_contents($outcmd, "\n\n$cmd\n", FILE_APPEND)
     if outcmd is not None:
         curl_cmd = (
-            "curl --fail-with-body --connect-timeout 2 --max-time 30 "
+            "curl --fail-with-body --connect-timeout 2 "
+            f"--max-time {int(read_timeout)} "
             f"--retry 10 --retry-max-time 0 {shlex.quote(url)}"
         )
         try:
@@ -510,12 +532,12 @@ def _handle_callback(args, outcmd: Path | None = None) -> None:
         except OSError as exc:
             logger.warning("could not append callback cmd to %s: %s", outcmd, exc)
 
-    deadline = time.monotonic() + 30.0
+    deadline = time.monotonic() + read_timeout
     last: Exception | None = None
     while True:
         try:
             status, body = _callback_get(
-                url, read_timeout=30.0, connect_timeout=2.0
+                url, read_timeout=read_timeout, connect_timeout=2.0
             )
             if status < 400:
                 logger.info("callback ok (HTTP %d: %r)", status, body[:80])
@@ -695,6 +717,23 @@ def _handle_export(
     # Split image for each requested dimension; collect pages for the PDF.
     all_page_files: list[Path] = []
     outinfo = {"dim": [], "paper": [], "count": []}
+
+    # Precompute the total PDF page count so per-page progress can map the
+    # split phase onto a 60..80% window (mirrors the download-phase bumps).
+    total_pages = 0
+    for dim in dims:
+        if dim not in paper_cfg["dimensions"]:
+            continue
+        tiles_w, tiles_h, _, _ = paper_cfg["dimensions"][dim]
+        page_tw, page_th, _ = determine_type(
+            int(region.width_m / 1000), int(region.height_m / 1000),
+            tiles_w, tiles_h,
+        )
+        pw, ph = int(page_tw * px_per_km), int(page_th * px_per_km)
+        cols, rows = split_grid(gray_img.shape[1], gray_img.shape[0], pw, ph)
+        total_pages += cols * rows
+
+    pages_done = 0
     for dim in dims:
         if dim not in paper_cfg["dimensions"]:
             logger.warning("Unknown dimension %s for %s; skipping", dim, paper)
@@ -731,6 +770,9 @@ def _handle_export(
             pf = outdir / f"{prefix}_{dim}_{i + 1}.png"
             _save_png(page_img, pf)
             page_files.append(pf)
+            pages_done += 1
+            if notifier is not None:
+                notifier.progress(0.60 + 0.20 * pages_done / max(1, total_pages))
 
         all_page_files.extend(page_files)
         outinfo["dim"].append(dim)
@@ -741,7 +783,7 @@ def _handle_export(
     # `array_merge(...$simage)` into one outfile).
     step("step:pdf")
     pdf_path = outdir / f"{prefix}.pdf"
-    pages_to_pdf(all_page_files, pdf_path, title=args.title)
+    pages_to_pdf(all_page_files, pdf_path, title=args.title, paper=paper)
     logger.info("Wrote %s (%d pages)", pdf_path, len(all_page_files))
 
     # Clean up the temporary page images (mirrors the PHP `unlink` loop).
