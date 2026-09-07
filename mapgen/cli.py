@@ -268,8 +268,6 @@ def cmd_make(args) -> None:
             if key == "func":
                 continue
             _log_record(f"  {key} = {value}")
-    if getattr(args, "agent", None):
-        logger.info("Agent %s Roger that ^_^", args.agent.strip())
 
     outdir = Path(args.output)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -279,6 +277,8 @@ def cmd_make(args) -> None:
     # Start the frontend progress notifier (best-effort).
     notifier = _make_notifier(args)
     notifier.start()
+    if getattr(args, "agent", None):
+        _report(notifier,"Agent %s Copy that!!" % args.agent.strip())
     _report(notifier, "step:start")
     _report(notifier, "ps%0")
 
@@ -311,24 +311,26 @@ def cmd_make(args) -> None:
         # Build color image: base + grid/logo/tags, then GPX on top so the
         # elevation-colored tracks are not obscured by the map content.
         _report(notifier, "step:style")
-        img_color = _apply_map_decorations(base, region, source, args)
-        if gpx_param:
-            _report(notifier, "step:gpx")
-            img_color = _apply_gpx_to_base(img_color, region, source, gpx_param)
+        decor_ops = _decor_ops(region, source, args)
+        gpx_op = (
+            [("gpx", lambda im: _apply_gpx_to_base(im, region, source, gpx_param))]
+            if gpx_param
+            else []
+        )
 
-        # Grayscale version (if not keep_color). The GPX is composited *after*
-        # grayscale so the elevation-colored tracks stay visible on the gray map.
         if args.keep_color:
+            img_color = _apply_ops(base, decor_ops + gpx_op, notifier, 0.40, 0.58, "style")
             img_gray = img_color.copy()
         else:
-            _report(notifier, "step:grayscale")
-            gray_img = _to_grayscale(base, source)
-            img_gray = _apply_map_decorations(gray_img, region, source, args)
-            if gpx_param:
-                img_gray = _apply_gpx_to_base(
-                    img_gray, region, source, gpx_param
-                )
-        _report(notifier, "ps%60")
+            img_color = _apply_ops(base, decor_ops + gpx_op, notifier, 0.40, 0.47, "style")
+
+            # Grayscale version. The GPX is composited *after* grayscale so the
+            # elevation-colored tracks stay visible on the gray map.
+            gray_ops = [("grayscale", lambda im: _to_grayscale(im, source))]
+            img_gray = _apply_ops(
+                base, gray_ops + decor_ops + gpx_op, notifier, 0.50, 0.59, "gray",
+            )
+        _report(notifier, "ps%60", 60)
 
         # Output files
         prefix = _output_prefix(region, args)
@@ -576,18 +578,39 @@ def _report(notifier, message: str, pct: int | None = None) -> None:
         notifier.progress(pct / 100.0)
 
 
-def _apply_map_decorations(img, region, source, args) -> np.ndarray:
-    """Apply grid lines, logo, and coordinate tags to an image in place order."""
+def _decor_ops(region, source, args) -> list[tuple[str, object]]:
+    """Ordered list of ``(name, fn)`` decoration steps applied to an image.
+
+    Mirrors the old single ``_apply_map_decorations`` pipeline: 100m grid,
+    1000m grid, logo, then coordinate tags. Each step is reported separately
+    so the frontend sees fine-grained progress across the 40..60% window.
+    """
     from .grinder import composite_logo, draw_grid_lines, tag_coordinates
 
-    out = img
+    ops = []
     if args.grid_100m:
-        out = draw_grid_lines(out, source.pixel_per_km, step_m=100)
+        ops.append(("grid100", lambda im: draw_grid_lines(im, source.pixel_per_km, step_m=100)))
     # 1000m grid is always drawn except v3+TWD67
     if not (args.map_type == "3" and region.datum == "TWD67"):
-        out = draw_grid_lines(out, source.pixel_per_km, step_m=1000)
-    out = composite_logo(out, f"{region.datum}\n{source.label}")
-    out = tag_coordinates(out, region, source.pixel_per_km)
+        ops.append(("grid1000", lambda im: draw_grid_lines(im, source.pixel_per_km, step_m=1000)))
+    ops.append(("logo", lambda im: composite_logo(im, f"{region.datum}\n{source.label}")))
+    ops.append(("tags", lambda im: tag_coordinates(im, region, source.pixel_per_km)))
+    return ops
+
+
+def _apply_ops(img, ops, notifier, start_frac, end_frac, prefix) -> np.ndarray:
+    """Apply ``(name, fn)`` steps to ``img``, reporting per-step progress.
+
+    Each step's progress fraction is spread evenly across
+    ``[start_frac, end_frac]`` so reported percentages stay strictly
+    increasing. Returns the resulting image.
+    """
+    out = img
+    n = len(ops)
+    for i, (name, fn) in enumerate(ops, start=1):
+        out = fn(out)
+        frac = start_frac + (end_frac - start_frac) * i / n
+        _report(notifier, f"step:{prefix}:{name}", int(round(frac * 100)))
     return out
 
 

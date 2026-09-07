@@ -164,13 +164,17 @@ def test_determine_type_portrait_for_small_region():
     assert (tw, th) == (5, 7)
 
 
+# Exact 1:25,000 (40 mm/km) resize ratio for A4/A3 5x7-family layouts.
+_540 = 40.0 * 1492 / (210.0 * 315)  # A4 ratio (same for every layout in family)
+
+
 def test_make_simage_keeps_scale_for_small_map():
     """A region smaller than a page keeps its print scale and lands near the
     top-left of the paper (PHP parity), never floating centered or stretched.
 
     split_image pads the page to the full page canvas (content top-left +
     white right/bottom); center-placing that padded page pins the 2x2 km map
-    to the paper's top-left area at the same 92% layout ratio as full pages.
+    to the paper's top-left area at the exact 40mm-per-km layout ratio.
     """
     px = 315
     page = _pad_to(_rgba(2 * px, 2 * px, fill=100), 5 * px + 42, 7 * px + 42)
@@ -180,22 +184,22 @@ def test_make_simage_keeps_scale_for_small_map():
     ys, xs = np.where(out[..., :3].min(axis=-1) != 255)
     h = ys.max() - ys.min() + 1
     w = xs.max() - xs.min() + 1
-    # 630 * 92% = 580 (aspect preserved, square)
-    assert abs(h - 580) <= 3 and abs(w - 580) <= 3
+    # 630 * 40mm ratio = 568 (aspect preserved, square)
+    assert abs(h - round(630 * _540)) <= 3 and abs(w - round(630 * _540)) <= 3
     # Near the top-left corner, NOT floating on the paper center
     assert xs.min() < 60 and ys.min() < 80
     assert xs.max() < 1492 // 2 and ys.max() < 2110 // 2
 
 
 def test_make_simage_full_page_same_scale():
-    """A full 5x7 page crop must land at the same 92% layout ratio."""
+    """A full 5x7 page crop must land at the exact 40mm-per-km layout ratio."""
     px = 315
     page = _rgba(7 * px, 5 * px + 42, fill=100)  # full height page + overlap
     out = make_simage(page, 1492, 2110, 5, 7, px)
     ys, xs = np.where(out[..., :3].min(axis=-1) != 255)
-    # (5*315+42)*92% = 1488 wide; 7*315*92% = 2029 tall (aspect preserved)
-    assert abs((xs.max() - xs.min() + 1) - 1488) <= 3
-    assert abs((ys.max() - ys.min() + 1) - 2029) <= 3
+    # (5*315+42)*40mm ratio; 7*315*40mm ratio (aspect preserved)
+    assert abs((xs.max() - xs.min() + 1) - round(1617 * _540)) <= 3
+    assert abs((ys.max() - ys.min() + 1) - round(2205 * _540)) <= 3
 
 
 def test_make_simage_multi_page_aligns_northwest():
@@ -212,12 +216,38 @@ def test_make_simage_multi_page_aligns_northwest():
         grid_info={"row": 0, "col": 1, "total_cols": 2, "total_rows": 1},
     )
     mask = out[..., :3].min(axis=-1) != 255
-    # Exclude the 42px paste-strip area (the SE junction index lives there)
-    ys, xs = np.where(mask[: 2110 - 42, : 1492 - 42])
-    # Top-left pinned (NW), not centered; 2x3 km content at 92% = 580x869
+    # Exclude the 56px paste-strip area (the SE junction index lives there)
+    ys, xs = np.where(mask[: 2110 - 56, : 1492 - 56])
+    # Top-left pinned (NW), not centered; 2x3 km at 40mm ratio = 568x853
     assert xs.min() <= 1 and ys.min() <= 1
-    assert abs((xs.max() - xs.min() + 1) - 580) <= 3
-    assert abs((ys.max() - ys.min() + 1) - 869) <= 3
+    assert abs((xs.max() - xs.min() + 1) - round(630 * _540)) <= 3
+    assert abs((ys.max() - ys.min() + 1) - round(945 * _540)) <= 3
+
+
+@pytest.mark.parametrize(
+    "px_w,px_h,paper_mm,tw,th",
+    [
+        (1492, 2110, (210.0, 297.0), 5, 7),   # A4 5x7 portrait
+        (2110, 1492, (297.0, 210.0), 7, 5),   # A4R 7x5 landscape
+        (2110, 2984, (297.0, 420.0), 7, 10),  # A3 7x10 portrait
+        (2984, 2110, (420.0, 297.0), 10, 7),  # A3R 10x7 landscape
+    ],
+)
+def test_make_simage_exact_40mm_per_km(px_w, px_h, paper_mm, tw, th):
+    """Each 5x7-family layout prints exactly 40 mm per 1km grid cell."""
+    px = 315
+    page = _pad_to(_rgba(th * px, tw * px, fill=100), tw * px + 42, th * px + 42)
+    out = make_simage(page, px_w, px_h, tw, th, px)
+    ys, xs = np.where(out[..., :3].min(axis=-1) != 255)
+    # Content bbox = terrain only (the 42px paste overlap is white here)
+    w_px = xs.max() - xs.min() + 1
+    h_px = ys.max() - ys.min() + 1
+    paper_w_mm, paper_h_mm = paper_mm
+    # mm/km = content_px / canvas_px * paper_mm / km_tiles
+    mm_per_km_w = w_px / px_w * paper_w_mm / tw
+    mm_per_km_h = h_px / px_h * paper_h_mm / th
+    assert mm_per_km_w == pytest.approx(40.0, abs=0.1)
+    assert mm_per_km_h == pytest.approx(40.0, abs=0.1)
 
 
 def _dark_page_mask(out):
@@ -245,29 +275,29 @@ def test_multi_page_paste_markers_centered_and_index_drawn():
                       grid_info={"row": 0, "col": 0, "total_cols": 3, "total_rows": 2})
     dark = _dark_page_mask(out)
     # Bottom marker: ink near the bottom edge, horizontally centered.
-    bottom = dark[h - 38:h - 10]
-    xs = np.where(bottom[:, :w - 44].any(axis=0))[0]
+    bottom = dark[h - 56:h - 8]
+    xs = np.where(bottom[:, :w - 60].any(axis=0))[0]
     assert abs((xs.min() + xs.max()) / 2 - w / 2) <= 8
     # Right marker: ink near the right edge, vertically centered.
-    right = dark[:, w - 44:w - 8]
-    ys = np.where(right[:h - 44].any(axis=1))[0]
+    right = dark[:, w - 56:w - 8]
+    ys = np.where(right[:h - 60].any(axis=1))[0]
     assert abs((ys.min() + ys.max()) / 2 - h / 2) <= 8
-    # The page-grid index lives fully inside the 32px strip junction
-    # (w-40..w-8, h-40..h-8): some dark cell grid there...
-    junction = dark[h - 40:h - 8, w - 40:w - 8]
+    # The page-grid index lives fully inside the 48px strip junction
+    # (w-56..w-8, h-56..h-8): some dark cell grid there...
+    junction = dark[h - 56:h - 8, w - 56:w - 8]
     assert 0.03 < junction.mean() < 0.5
     # ...and NOTHING dark between the junction and the map content edge:
-    # the 100m band just inside the strips (h-140..h-44 / w-140..w-44) stays
+    # the 100m band just inside the strips (h-140..h-60 / w-140..w-60) stays
     # blank on this white page.
-    assert dark[h - 140:h - 44, w - 140:w - 44].sum() < 100
+    assert dark[h - 140:h - 60, w - 140:w - 60].sum() < 100
 
     # Last-row page (row=1, col=0): no bottom marker, right marker still there.
     out = make_simage(page, 1492, 2110, 5, 5, 315,
                       grid_info={"row": 1, "col": 0, "total_cols": 3, "total_rows": 2})
     dark = _dark_page_mask(out)
-    xs = np.where(dark[h - 38:h - 10, :w - 44].any(axis=0))[0]
+    xs = np.where(dark[h - 56:h - 8, :w - 60].any(axis=0))[0]
     assert len(xs) == 0
-    ys = np.where(dark[:, w - 44:w - 8][:h - 44].any(axis=1))[0]
+    ys = np.where(dark[:, w - 56:w - 8][:h - 60].any(axis=1))[0]
     assert len(ys) > 0
 
 

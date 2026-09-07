@@ -85,7 +85,8 @@ def tag_coordinates(
     px_per_km: float,
     font_size: int | None = None,
     label_color=(0, 0, 0),
-    bg_color=(255, 255, 255),
+    stroke_color=(255, 255, 255),
+    stroke_width: int = 2,
 ) -> np.ndarray:
     """Add TWD coordinate labels around all four edges of the image.
 
@@ -93,7 +94,8 @@ def tag_coordinates(
     ``px_per_km`` is the image's density. Returns a new array.
 
     Labels are drawn at each 1km boundary matching the PHP spacing, with a
-    white margin box for legibility.
+    ``stroke_color`` outline around each digit for legibility instead of a
+    filled white box.
     """
 
     out = _as_rgba_image(img)
@@ -112,7 +114,8 @@ def tag_coordinates(
         (i.e. relative to the label's top-left). FreeType renders ink a few px
         away from ``textbbox``, so placement must probe the real ink instead of
         trusting the metrics, or edge labels get clipped (bottom X labels
-        previously extended past the image bottom edge).
+        previously extended past the image bottom edge). The ``stroke_width``
+        is added to every extent so the outline never gets clipped.
         """
         bb = draw.textbbox((0, 0), text, font=font)
         pw, ph = max(1, bb[2] - bb[0]), max(1, bb[3] - bb[1])
@@ -121,9 +124,14 @@ def tag_coordinates(
         a = np.array(probe)
         ink = a < 128
         rows = np.where(ink.any(axis=1))[0]
+        base_w = bb[2] - bb[0]
         if not len(rows):
-            return bb[2] - bb[0], 0, max(1, ph)
-        return bb[2] - bb[0], 2 * bb[1] + int(rows.min()), 2 * bb[1] + int(rows.max())
+            return base_w + stroke_width, 0, max(1, ph)
+        return (
+            base_w + 2 * stroke_width,
+            2 * bb[1] + int(rows.min()) - stroke_width,
+            2 * bb[1] + int(rows.max()) + stroke_width,
+        )
 
     # Bottom edge: X coordinates increasing left->right
     x_km = region.x0 / 1000.0
@@ -136,9 +144,9 @@ def tag_coordinates(
         bx = x_px + 2
         # Ink bottom sits `bottom_margin` px above the image edge so the
         # digits are fully visible (the old h - th - 2 pushed them past it).
-        bottom_margin = 4
+        bottom_margin = 4 + stroke_width
         by = h - bottom_margin - ink_bottom
-        _draw_label(draw, label, font, bx, by, label_color, bg_color)
+        _draw_label(draw, label, font, bx, by, label_color, stroke_color, stroke_width)
         x_px += step_px
         f = int(x_km) + 1
         x_km = float(f)
@@ -150,7 +158,7 @@ def tag_coordinates(
         label = f"{int(round(x_km)):d}"
         tw, _, _ = _measure(draw, label, font)
         bx = x_px + 2
-        _draw_label(draw, label, font, bx, 0, label_color, bg_color)
+        _draw_label(draw, label, font, bx, stroke_width, label_color, stroke_color, stroke_width)
         x_px += step_px
         f = int(x_km) + 1
         x_km = float(f)
@@ -164,7 +172,7 @@ def tag_coordinates(
         # Below the horizontal grid line (PHP places it at i+1); the label
         # x stays at the image's left edge.
         by = y_px + 2
-        _draw_label(draw, label, font, 2, by, label_color, bg_color)
+        _draw_label(draw, label, font, 2, by, label_color, stroke_color, stroke_width)
         y_px += step_px
         f = int(y_km) - 1
         y_km = float(f)
@@ -176,7 +184,7 @@ def tag_coordinates(
         label = f"{int(round(y_km)):d}"
         tw, ink_top, ink_bottom = _measure(draw, label, font)
         by = y_px + 2
-        _draw_label(draw, label, font, w - tw - 2, by, label_color, bg_color)
+        _draw_label(draw, label, font, w - tw - 2, by, label_color, stroke_color, stroke_width)
         y_px += step_px
         f = int(y_km) - 1
         y_km = float(f)
@@ -184,16 +192,12 @@ def tag_coordinates(
     return np.array(out)
 
 
-def _draw_label(draw, text, font, x, y, color, bg_color):
+def _draw_label(draw, text, font, x, y, color, stroke_color, stroke_width=2):
     bbox = draw.textbbox((0, 0), text, font=font)
-    tw = bbox[2] - bbox[0]
-    th = bbox[3] - bbox[1]
-    pad = 3
-    draw.rectangle(
-        [(x - pad, y - pad + bbox[1]), (x + tw + pad, y + th + pad + bbox[1])],
-        fill=bg_color,
+    draw.text(
+        (x + bbox[0], y + bbox[1]), text, font=font, fill=color,
+        stroke_width=stroke_width, stroke_fill=stroke_color,
     )
-    draw.text((x + bbox[0], y + bbox[1]), text, font=font, fill=color)
 
 
 def composite_logo(
@@ -202,6 +206,7 @@ def composite_logo(
     font_path: str | None = None,
     font_size: int = 26,
     line_spacing: int | None = None,
+    radius: int = 10,
 ) -> np.ndarray:
     """Stamp a text logo in the northeast (top-right) corner.
 
@@ -209,7 +214,8 @@ def composite_logo(
     first line, source label beneath it). ``line_spacing`` sets the vertical
     gap between lines (default ~60% of the font size, wider than the old
     ``font_size // 8`` so two-line titles like ``TWD67\\n魯地圖`` breathe).
-    Returns a new array.
+    Lines are drawn black on a rounded white box so they stay readable over
+    map content. Returns a new array.
     """
     out = _as_rgba_image(img)
     w, h = out.size
@@ -232,8 +238,9 @@ def composite_logo(
     pad = 8
     x0 = w - tw - pad * 2
     y0 = pad
-    draw.rectangle(
-        [(x0, y0), (x0 + tw + pad * 2, y0 + th + pad * 2)], fill=(255, 255, 255)
+    draw.rounded_rectangle(
+        [x0, y0, x0 + tw + pad * 2, y0 + th + pad * 2], radius=radius,
+        fill=(255, 255, 255),
     )
     cy = y0 + pad
     for line, lh in zip(lines, heights):

@@ -133,6 +133,48 @@ def _pad_to(img: np.ndarray, w: int, h: int) -> np.ndarray:
     return out
 
 
+# Physical paper dimensions (mm) keyed by canvas pixel size. A4 and A3 are
+# the only paper sizes: portrait/landscape share the same px dimensions so a
+# single (px_w, px_h) lookup identifies the paper's width/height in mm.
+_PAPER_MM = {
+    (1492, 2110): (210.0, 297.0),  # A4 portrait
+    (2110, 1492): (297.0, 210.0),  # A4 landscape
+    (2110, 2984): (297.0, 420.0),  # A3 portrait
+    (2984, 2110): (420.0, 297.0),  # A3 landscape
+}
+
+# Target printed scale: 40 mm per km (1:25,000), applied only to the "5x7"
+# family of page layouts so each grid cell prints exactly 40 mm on paper.
+TARGET_MM_PER_KM = 40.0
+
+# Page tile layouts that print at the exact 1:25,000 target scale:
+# {A4: 5x7, A4R: 7x5, A3: 7x10, A3R: 10x7} (unordered).
+_TARGET_LAYOUTS = frozenset({frozenset((5, 7)), frozenset((7, 10))})
+
+
+def _is_target_layout(tiles_w: int, tiles_h: int) -> bool:
+    """True if the page layout is one of the exact-scale 5x7 family."""
+    return frozenset((tiles_w, tiles_h)) in _TARGET_LAYOUTS
+
+
+def _target_scale_ratio(px_w: int, px_h: int, px_per_km: float) -> float | None:
+    """Uniform resize ratio for exact 40mm/km, or None if not applicable.
+
+    A fixed canvas pixel <-> physical mm mapping (e.g. A4 1492px == 210mm)
+    means the ratio to print ``tiles_w`` km across the paper width at a given
+    mm-per-km is ``target * tiles_w / paper_mm_w * px_w``, which cancels the
+    tile count and depends only on the paper and pixel density. This is the
+    same uniform value for every 5x7-family layout (A4/A4R/A3/A3R).
+    """
+    paper_mm = _PAPER_MM.get((px_w, px_h))
+    if paper_mm is None:
+        return None
+    paper_w_mm, paper_h_mm = paper_mm
+    r_w = TARGET_MM_PER_KM * px_w / (paper_w_mm * px_per_km)
+    r_h = TARGET_MM_PER_KM * px_h / (paper_h_mm * px_per_km)
+    return min(r_w, r_h)
+
+
 def make_simage(
     page: np.ndarray,
     px_w: int,
@@ -150,6 +192,10 @@ def make_simage(
     every page of the same dimension prints at the same map scale. The page
     image is resized by that ratio (aspect preserved, no per-axis stretch).
 
+    The 5x7 family of layouts (A4 5x7, A4R 7x5, A3 7x10, A3R 10x7) uses an
+    exact 1:25,000 target scale so each 1km grid cell prints exactly 40 mm;
+    all other dimensions keep the legacy shrink-to-fit ratio.
+
     The resized page is placed on the white canvas like PHP ``make_simages``:
     - multi-page layouts use the ``NorthWest`` gravity (top-left) so every
       page shares the same reference corner and the tiles paste together;
@@ -159,14 +205,19 @@ def make_simage(
     ``grid_info`` (when provided) adds paste-alignment marks and the page's
     grid index in the corner. ``index_img`` is an optional small overlay.
     """
-    ratio_x = (px_w - PAGE_OVERLAP_PX) / (tiles_w * px_per_km)
-    ratio_y = (px_h - PAGE_OVERLAP_PX) / (tiles_h * px_per_km)
-    ratio = max(1, int(math.floor(min(ratio_x, ratio_y) * 100)))
+    if _is_target_layout(tiles_w, tiles_h):
+        ratio = _target_scale_ratio(px_w, px_h, px_per_km)
+    else:
+        ratio = None
+    if ratio is None:
+        ratio_x = (px_w - PAGE_OVERLAP_PX) / (tiles_w * px_per_km)
+        ratio_y = (px_h - PAGE_OVERLAP_PX) / (tiles_h * px_per_km)
+        ratio = max(1, int(math.floor(min(ratio_x, ratio_y) * 100))) / 100.0
 
     im = Image.fromarray(page).convert("RGBA")
-    if ratio != 100:
-        nw = max(1, round(im.width * ratio / 100))
-        nh = max(1, round(im.height * ratio / 100))
+    if abs(ratio - 1.0) > 1e-9:
+        nw = max(1, round(im.width * ratio))
+        nh = max(1, round(im.height * ratio))
         im = im.resize((nw, nh), Image.LANCZOS)
 
     canvas = Image.new("RGBA", (px_w, px_h), (255, 255, 255, 255))
@@ -195,7 +246,7 @@ def _add_borders(img: np.ndarray, grid_info) -> np.ndarray:
     im = Image.fromarray(img if img.ndim == 3 else np.stack([img] * 3, -1))
     w, h = im.size
     draw = ImageDraw.Draw(im)
-    font = _default_font(24)
+    font = _default_font(32)
 
     row, col, total_cols, total_rows = (
         grid_info.get("row", 0),
@@ -208,22 +259,22 @@ def _add_borders(img: np.ndarray, grid_info) -> np.ndarray:
     # centered on the edge. Mirrors PHP `pango:'黏\n\n\n\n貼\n\n\n\n處'` with
     # `-gravity East`.
     if col < total_cols - 1:
-        text = "黏\n\n\n\n\n\n貼\n\n\n\n\n\n處"
-        draw.rectangle([w - 40, 40, w - 8, h - 40], fill=(255, 255, 255))
+        text = "黏" + "\n"*12 + "貼" + "\n"*12 + "處"
+        draw.rectangle([w - 56, 0, w, h], fill=(255, 255, 255))
         _draw_multiline_centered(
-            draw, text, font, x_center=w - 24, y_center=h / 2, color=(0, 0, 0)
+            draw, text, font, x_center=w - 32, y_center=h / 2, color=(0, 0, 0)
         )
 
     # Bottom edge: horizontal marker (not on last row), horizontally centered.
     # Mirrors PHP `pango:'黏             貼             處'` with `-gravity South`.
     if row < total_rows - 1:
         text = "黏" + "\u3000" * 8 + "貼" + "\u3000" * 8 + "處"
-        draw.rectangle([40, h - 40, w - 40, h - 8], fill=(255, 255, 255))
+        draw.rectangle([0, h - 56, w, h - 8], fill=(255, 255, 255))
         _draw_text_centered(
-            draw, text, font, x_center=w / 2, y_center=h - 24, color=(0, 0, 0)
+            draw, text, font, x_center=w / 2, y_center=h - 32, color=(0, 0, 0)
         )
 
-    # Page-index grid in the SE corner, confined to the 32px junction where the
+    # Page-index grid in the SE corner, confined to the 48px junction where the
     # bottom and right paste strips overlap so it never covers the map.
     # Mirrors PHP `Splitter::imageindex` (grid of page cells, current filled).
     if total_cols * total_rows > 1:
@@ -262,20 +313,20 @@ def _draw_text_centered(draw, text, font, x_center, y_center, color):
 def _draw_page_index(draw, row, col, total_cols, total_rows, w, h):
     """Draw the PHP-style page-index grid diagram in the SE corner.
 
-    Confined to the 32px paste-strip junction (bottom + right strips overlap
-    at ``[w-40, w-8] x [h-40, h-8]``) so it never covers the map content.
+    Confined to the 48px paste-strip junction (bottom + right strips overlap
+    at ``[w-56, w-8] x [h-56, h-8]``) so it never covers the map content.
     Mirrors ``Splitter::imageindex()``: an white grid of page cells with the
     current page filled black and the rest outlined.
     """
-    x0 = w - 40
-    y0 = h - 40
-    inner = 24  # grid area inside the junction, with a small margin
+    x0 = w - 56
+    y0 = h - 56
+    inner = 42  # grid area inside the junction, with a small margin
     cell_w = max(1, inner // total_cols)
     cell_h = max(1, inner // total_rows)
     grid_w = cell_w * total_cols
     grid_h = cell_h * total_rows
-    gx = x0 + (32 - grid_w) // 2
-    gy = y0 + (32 - grid_h) // 2
+    gx = x0 + (48 - grid_w) // 2
+    gy = y0 + (48 - grid_h) // 2
     draw.rectangle([gx, gy, gx + grid_w - 1, gy + grid_h - 1], fill=(255, 255, 255))
     for j in range(total_rows):
         for i in range(total_cols):
