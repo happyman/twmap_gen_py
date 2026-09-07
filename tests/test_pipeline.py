@@ -25,6 +25,41 @@ def test_multiply_composite_darkens():
     assert out[0, 0, 0] == pytest.approx(64, abs=1)
 
 
+# --------------------------------------------------------------------------
+# Paper dimension tables (PHP Splitter parity)
+# --------------------------------------------------------------------------
+
+
+def test_a4_and_a3_share_frontend_dim_names():
+    from mapgen.config import PAPER_TYPES
+
+    assert set(PAPER_TYPES["A4"]["dimensions"]) == {
+        "5x7",
+        "4x6",
+        "3x4",
+        "2x3",
+        "1x2",
+    }
+    assert set(PAPER_TYPES["A3"]["dimensions"]) == set(
+        PAPER_TYPES["A4"]["dimensions"]
+    )
+
+
+def test_a3_dimensions_use_php_splitter_grids():
+    from mapgen.config import PAPER_TYPES
+
+    a3 = PAPER_TYPES["A3"]["dimensions"]
+    px = (2110, 2984)
+    px_l = (2984, 2110)
+    # Mirrors the PHP `Splitter` switch: each frontend dim keeps its name and
+    # maps to a scaled-up A3 tile grid (7x10, 6x8, 4x6, 3x4, 2x2).
+    assert a3["5x7"] == (7, 10, px, px_l)
+    assert a3["4x6"] == (6, 8, px, px_l)
+    assert a3["3x4"] == (4, 6, px, px_l)
+    assert a3["2x3"] == (3, 4, px, px_l)
+    assert a3["1x2"] == (2, 2, px, px_l)
+
+
 def test_multiply_white_is_identity():
     a = _rgba(10, 10, fill=100)
     white = _rgba(10, 10, fill=255)

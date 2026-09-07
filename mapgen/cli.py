@@ -710,7 +710,7 @@ def _handle_export(
     paper = "A3" if args.a3 else "A4"
     dims = [d for d in args.dims] if args.dims else []
     if not dims:
-        dims = ["5x7"] if paper == "A4" else ["7x10"]
+        dims = ["5x7"]
 
     paper_cfg = PAPER_TYPES[paper]
 
@@ -776,7 +776,7 @@ def _handle_export(
 
         all_page_files.extend(page_files)
         outinfo["dim"].append(dim)
-        outinfo["paper"].append(paper)
+        outinfo["paper"].append(f"{paper}{'R' if landscape else ''}")
         outinfo["count"].append(len(pages))
 
     # PDF: all dims merged into a single `{prefix}.pdf` (mirrors the PHP

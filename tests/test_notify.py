@@ -171,6 +171,51 @@ def test_cmd_make_emits_progress_steps(tmp_path, monkeypatch):
         logging.disable(logging.NOTSET)
 
 
+def test_cmd_make_a3_with_5x7_emits_pages(tmp_path, monkeypatch):
+    """--a3 + the frontend's -D 5x7 must produce A3 pages, not skip all dims.
+
+    The PHP Splitter maps the *same* dim names to paper-specific grids (A3
+    5x7 = 7x10 tiles); a 5x7 request on A3 used to be "Unknown dimension"
+    and yielded an empty PDF / empty `{prefix}.txt`.
+    """
+    import json
+
+    import mapgen.stitcher as stitcher
+
+    monkeypatch.setattr(stitcher, "build_base_image", _fake_base_image)
+
+    out = tmp_path / "out"
+    args = cli.build_parser().parse_args(
+        [
+            "make",
+            "--region",
+            "250000,2743650,1,1,TWD67",
+            "--output",
+            str(out),
+            "--map-type",
+            "2016",
+            "-3",
+            "-D",
+            "5x7",
+            "--tmpdir",
+            str(out),
+        ]
+    )
+    cli.cmd_make(args)
+
+    txt = next(out.glob("*.txt"))
+    info = json.loads(txt.read_text(encoding="utf-8"))
+    assert info["dim"] == ["5x7"]
+    assert info["paper"] == ["A3"]
+    assert info["count"] == [1]
+
+    pdf = txt.with_suffix(".pdf")
+    assert pdf.exists()
+    from pypdf import PdfReader
+
+    assert len(PdfReader(str(pdf)).pages) == 1
+
+
 def test_cmd_make_writes_input_params_to_logfile(tmp_path, monkeypatch):
     import logging
 
