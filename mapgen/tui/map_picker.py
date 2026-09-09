@@ -12,8 +12,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
-PICKER_URL = "https://dev.happyman.idv.tw/map/?mode=picker&return=http://127.0.0.1:"
-_TIMEOUT = 300  # seconds
+from ..settings import picker_timeout, picker_url
 
 _server: HTTPServer | None = None
 _lock = threading.Lock()
@@ -73,9 +72,9 @@ def pick() -> dict | None:
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
 
-    webbrowser.open(f"{PICKER_URL}{port}")
+    webbrowser.open(f"{picker_url()}{port}")
 
-    _Handler.server_event.wait(timeout=_TIMEOUT)
+    _Handler.server_event.wait(timeout=picker_timeout())
     with _lock:
         _server = None
     server.shutdown()

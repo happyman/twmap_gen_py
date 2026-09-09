@@ -1,0 +1,15 @@
+# Taiwan Map Generator user configuration.
+# Edit values here; delete a key to fall back to its built-in default.
+# 一般來說這個檔案不用更改
+[picker]
+# Map-picker page opened when the user clicks "從地圖選擇範圍".
+# The return base URL is the local callback server; the port is appended.
+url = "https://twmap.happyman.idv.tw/map/?mode=picker&return=http://127.0.0.1:"
+# Seconds to wait for the picker callback before giving up.
+timeout = 300
+
+[output]
+# Default font for CJK text on the generated map. Empty string uses the
+# font bundled with the package (mapgen/assets/wqy-microhei.ttc).
+# 設定如果你要特殊字型
+font_path = ""

@@ -56,7 +56,8 @@ from .core import (
     to_argv,
     validate,
 )
-from .map_picker import pick as pick_from_map, stop as stop_picker
+from .map_picker import pick as pick_from_map
+from .map_picker import stop as stop_picker
 
 SOURCE_LABELS = {k: f"{k} — {src.label}" for k, src in list_sources()}
 
@@ -480,12 +481,11 @@ class MapGenApp(App[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="page"):
-            with Horizontal(id="header"):
-                yield Static(
-                    f"Taiwan Map Generator v{__version__} | "
-                    "歡迎使用台灣山區地圖產生器 — mapgen-tui",
-                    id="header-text",
-                )
+            yield Static(
+                f"Taiwan Map Generator v{__version__} | "
+                "歡迎使用台灣山區地圖產生器 — mapgen-tui",
+                id="header",
+            )
             with Horizontal(id="title-row", classes="row"):
                 with Horizontal(classes="cpair"):
                     yield Label("標題描述", classes="label")
@@ -925,6 +925,10 @@ def main(argv: list[str] | None = None) -> int:
         for err in errors:
             print(f"mapgen-tui: {err}", file=sys.stderr)
         return 2
+    if not form.font_path:
+        from ..settings import font_path as config_font
+
+        form.font_path = config_font()
     app = MapGenApp(form=form, region_locked=region_locked, gpx_reg=gpx_reg)
     app.run()
     if app._exit_message:
