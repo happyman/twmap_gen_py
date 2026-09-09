@@ -56,6 +56,7 @@ from .core import (
     to_argv,
     validate,
 )
+from .map_picker import pick as pick_from_map, stop as stop_picker
 
 SOURCE_LABELS = {k: f"{k} — {src.label}" for k, src in list_sources()}
 
@@ -268,6 +269,11 @@ class MapGenApp(App[None]):
         color: $text;
         margin-bottom: 1;
     }
+    #pick-map {
+        width: auto;
+        height: 3;
+        margin-left: 1;
+    }
     .section {
         text-style: bold;
         color: $accent;
@@ -474,11 +480,12 @@ class MapGenApp(App[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="page"):
-            yield Static(
-                f"Taiwan Map Generator v{__version__} | "
-                "歡迎使用台灣山區地圖產生器 — mapgen-tui",
-                id="header",
-            )
+            with Horizontal(id="header"):
+                yield Static(
+                    f"Taiwan Map Generator v{__version__} | "
+                    "歡迎使用台灣山區地圖產生器 — mapgen-tui",
+                    id="header-text",
+                )
             with Horizontal(id="title-row", classes="row"):
                 with Horizontal(classes="cpair"):
                     yield Label("標題描述", classes="label")
@@ -493,6 +500,7 @@ class MapGenApp(App[None]):
                         allow_blank=False,
                         id="map-type",
                     )
+                    yield Button("從地圖選擇範圍", id="pick-map", variant="primary")
 
             if self._region_locked:
                 yield Label("行跡資訊 | Input GPX", classes="section")
@@ -699,6 +707,54 @@ class MapGenApp(App[None]):
             self.action_run()
         elif button_id == "quit":
             self.action_quit()
+        elif button_id == "pick-map":
+            self._launch_picker()
+
+    def _launch_picker(self) -> None:
+        """Open the map picker in a browser, then fill the form on return."""
+        self.run_worker(self._picker_worker, thread=True, name="map-picker")
+
+    async def _picker_worker(self) -> None:
+        import asyncio
+
+        result = await asyncio.to_thread(pick_from_map)
+        if result is None:
+            self.notify("地圖選擇逾時或已取消", severity="warning")
+            return
+        try:
+            x = float(result["x"]) if result.get("x") else self._form.startx
+            y = float(result["y"]) if result.get("y") else self._form.starty
+            sx = int(float(result["shiftx"])) if result.get("shiftx") else self._form.shiftx
+            sy = int(float(result["shifty"])) if result.get("shifty") else self._form.shifty
+            datum = result.get("datum") or self._form.datum
+            penghu = result.get("ph") == "1"
+            title = result.get("title") or self._form.title
+        except (ValueError, TypeError) as exc:
+            self.notify(f"地圖選擇回傳值錯誤: {exc}", severity="error")
+            return
+
+        self._form.startx = x
+        self._form.starty = y
+        self._form.shiftx = sx
+        self._form.shifty = sy
+        self._form.datum = datum
+        self._form.penghu = penghu
+        self._form.title = title
+        self._refresh_form_widgets()
+        self.notify("已套用地圖選擇結果", severity="information")
+
+    def _refresh_form_widgets(self) -> None:
+        """Sync widget values from ``self._form`` after picker update."""
+        try:
+            self.query_one("#title", Input).value = self._form.title
+            self.query_one("#startx", Input).value = _fmt_num(self._form.startx)
+            self.query_one("#starty", Input).value = _fmt_num(self._form.starty)
+            self.query_one("#shiftx", Input).value = _fmt_num(self._form.shiftx)
+            self.query_one("#shifty", Input).value = _fmt_num(self._form.shifty)
+            self.query_one("#twd97", Checkbox).value = self._form.datum == "TWD97"
+            self.query_one("#area", Select).value = "penghu" if self._form.penghu else "taiwan"
+        except Exception:
+            pass  # region_locked or widget not present
 
     def action_run(self) -> None:
         """Run the previewed command (bound to the Run button and ctrl+r).
@@ -794,6 +850,7 @@ class MapGenApp(App[None]):
 
     def action_quit(self) -> None:
         self._terminate()
+        stop_picker()
         cmd = _cmd_text(self._sys_args) if self._sys_args else ""
         self._exit_message = (f"尚未執行。預覽指令:\n{cmd}" if cmd
                               else "尚未執行。表單未完整無法產生指令。")
