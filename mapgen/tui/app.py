@@ -12,6 +12,11 @@ color, live outdir), then the generated command preview and Run/Quit.
 
 Any ``mapgen make`` flag passed to ``mapgen-tui`` prefills the form; e.g.
 ``mapgen-tui -v 3 -t 合歡山 -p 1`` opens with those values already set.
+``mapgen-tui --from-gpx track.gpx [--datum TWD97]`` derives the region from
+the GPX file (Taiwan/Penghu auto-detected, centred on the track with >= 1 km
+margin, aligned to A4 5x7 km pages), locks the region section, prefills the
+title from the track/file name, and shows a 行跡資訊 section with
+航跡標記/航點標記 toggles.
 """
 
 from __future__ import annotations
@@ -39,6 +44,7 @@ from textual.widgets import (
 
 from .. import __version__
 from ..config import list_sources
+from ..gpx_region import region_from_gpx
 from .core import (
     DEFAULT_TITLE,
     EXTRA_DIMS,
@@ -65,6 +71,24 @@ def _fmt_num(value: float | int) -> str:
     except (TypeError, ValueError):
         return str(value)
     return str(int(f)) if f.is_integer() else str(f)
+
+
+def _gpx_info_text(reg) -> str:
+    """Human-readable summary of the derived region for the GPX section."""
+    area = "澎湖" if reg.penghu else "台灣"
+    counts = f"{reg.tracks} 軌跡, {reg.routes} 路線, {reg.waypoints} 航點, 共 {reg.points} 點"
+    wgs = (
+        f"WGS84: {reg.lon_min:.3f},{reg.lat_min:.3f} — "
+        f"{reg.lon_max:.3f},{reg.lat_max:.3f}"
+    )
+    spec = (
+        f"{reg.datum}({area}): 左上 {reg.x0},{reg.y0}，{reg.shiftx}×{reg.shifty} km"
+    )
+    return (
+        f"{Path(reg.path).name} | {counts}\n"
+        f"{wgs}\n"
+        f"{spec} [dim]— {reg.spec}[/dim]"
+    )
 
 
 class ConfirmScreen(ModalScreen[bool]):
@@ -191,7 +215,11 @@ HELP_TEXT = """\
 Run 先顯示確認框，執行期間於浮動視窗即時顯示輸出；
 結束後按 OK 離開並列出輸出目錄產出的檔案。
 
-任何 [b]mapgen make[/b] 旗標都可預填表單，例：[b]mapgen-tui -t 合歡山 -v 3[/b]。"""
+任何 [b]mapgen make[/b] 旗標都可預填表單，例：[b]mapgen-tui -t 合歡山 -v 3[/b]。
+以 [b]--from-gpx 檔案.gpx [--datum TWD67|TWD97][/b] 啟動時，範圍自動由
+GPX 決定（台灣/澎湖自動），以軌跡為中心、至少 1km 邊距、對齊 A4 5x7 km
+頁面；標題自動取軌跡名稱（否則檔名）。勾選 '航跡標記/航點標記' 即可
+在輸出標示軌跡上的點與航點（反映在 [b]--gpx 路徑:trk:wpt[/b]）。"""
 
 
 class HelpScreen(ModalScreen[None]):
@@ -281,6 +309,15 @@ class MapGenApp(App[None]):
     }
     .chkrow Checkbox {
         margin-right: 1;
+    }
+    #gpx-info {
+        height: auto;
+        color: $text-muted;
+        margin: 0 0 1 0;
+    }
+    #gpxflags {
+        height: auto;
+        margin: 0 0 0 0;
     }
     #outdir {
         color: $text-muted;
@@ -417,8 +454,16 @@ class MapGenApp(App[None]):
         ("ctrl+q", "quit", "離開"),
     ]
 
-    def __init__(self, form: MapForm | None = None) -> None:
+    def __init__(
+        self,
+        form: MapForm | None = None,
+        region_locked: bool = False,
+        gpx_reg=None,
+    ) -> None:
         self._form = form if form is not None else MapForm()
+        self._region_locked = region_locked
+        self._gpx_reg = gpx_reg
+        self._gpx_path = gpx_reg.path if gpx_reg is not None else ""
         self._proc: subprocess.Popen | None = None
         self._sys_args: list[str] = []
         self._outdir = ""
@@ -447,44 +492,59 @@ class MapGenApp(App[None]):
                         id="map-type",
                     )
 
-            yield Label("輸入範圍 (km) | Region & Datum", classes="section")
-            with Horizontal(id="coord1", classes="row"):
-                with Horizontal(classes="cpair"):
-                    yield Label("左上x", classes="label")
-                    yield Input(
-                        _fmt_num(self._form.startx),
-                        id="startx",
-                        placeholder="149-351",
+            if self._region_locked:
+                yield Label("行跡資訊 | Input GPX", classes="section")
+                yield Static(_gpx_info_text(self._gpx_reg), id="gpx-info")
+                with Horizontal(id="gpxflags", classes="row chkrow"):
+                    yield Checkbox(
+                        "航跡標記 label_trk",
+                        value=self._form.label_trk > 0,
+                        id="label-trk",
                     )
-                with Horizontal(classes="cpair"):
-                    yield Label("左上y", classes="label")
-                    yield Input(
-                        _fmt_num(self._form.starty),
-                        id="starty",
-                        placeholder="2424-2800",
+                    yield Checkbox(
+                        "航點標記 label_wpt",
+                        value=self._form.label_wpt > 0,
+                        id="label-wpt",
                     )
-                yield Checkbox(
-                    "TWD97",
-                    value=self._form.datum == "TWD97",
-                    id="twd97",
-                )
-            with Horizontal(id="coord2", classes="row"):
-                with Horizontal(classes="cpair"):
-                    yield Label("shiftx", classes="label")
-                    yield Input(
-                        _fmt_num(self._form.shiftx), id="shiftx", placeholder="3"
+            else:
+                yield Label("輸入範圍 (km) | Region & Datum", classes="section")
+                with Horizontal(id="coord1", classes="row"):
+                    with Horizontal(classes="cpair"):
+                        yield Label("左上x", classes="label")
+                        yield Input(
+                            _fmt_num(self._form.startx),
+                            id="startx",
+                            placeholder="149-351",
+                        )
+                    with Horizontal(classes="cpair"):
+                        yield Label("左上y", classes="label")
+                        yield Input(
+                            _fmt_num(self._form.starty),
+                            id="starty",
+                            placeholder="2424-2800",
+                        )
+                    yield Checkbox(
+                        "TWD97",
+                        value=self._form.datum == "TWD97",
+                        id="twd97",
                     )
-                with Horizontal(classes="cpair"):
-                    yield Label("shifty", classes="label")
-                    yield Input(
-                        _fmt_num(self._form.shifty), id="shifty", placeholder="3"
+                with Horizontal(id="coord2", classes="row"):
+                    with Horizontal(classes="cpair"):
+                        yield Label("shiftx", classes="label")
+                        yield Input(
+                            _fmt_num(self._form.shiftx), id="shiftx", placeholder="3"
+                        )
+                    with Horizontal(classes="cpair"):
+                        yield Label("shifty", classes="label")
+                        yield Input(
+                            _fmt_num(self._form.shifty), id="shifty", placeholder="3"
+                        )
+                    yield Select(
+                        [("台灣", "taiwan"), ("澎湖", "penghu")],
+                        value="penghu" if self._form.penghu else "taiwan",
+                        allow_blank=False,
+                        id="area",
                     )
-                yield Select(
-                    [("台灣", "taiwan"), ("澎湖", "penghu")],
-                    value="penghu" if self._form.penghu else "taiwan",
-                    allow_blank=False,
-                    id="area",
-                )
 
             yield Label("輸出選項 | Output Options", classes="section")
             with Horizontal(id="dims", classes="row chkrow"):
@@ -541,19 +601,41 @@ class MapGenApp(App[None]):
                 except ValueError:
                     return fallback
 
+        if self._region_locked:
+            startx = self._form.startx
+            starty = self._form.starty
+            shiftx = int(self._form.shiftx)
+            shifty = int(self._form.shifty)
+            datum = self._form.datum
+            penghu = self._form.penghu
+        else:
+            startx = _num("startx", self._form.startx)
+            starty = _num("starty", self._form.starty)
+            shiftx = int(_num("shiftx", self._form.shiftx))
+            shifty = int(_num("shifty", self._form.shifty))
+            datum = "TWD97" if self.query_one("#twd97", Checkbox).value else "TWD67"
+            penghu = self.query_one("#area", Select).value == "penghu"
+
+        label_trk = self.query_one("#label-trk", Checkbox).value if (
+            self._region_locked) else self._form.label_trk > 0
+        label_wpt = self.query_one("#label-wpt", Checkbox).value if (
+            self._region_locked) else self._form.label_wpt > 0
+
         dims = [d for d in EXTRA_DIMS
                 if self.query_one(f"#d{d}", Checkbox).value]
         return MapForm(
-            startx=_num("startx", self._form.startx),
-            starty=_num("starty", self._form.starty),
-            shiftx=int(_num("shiftx", self._form.shiftx)),
-            shifty=int(_num("shifty", self._form.shifty)),
-            datum="TWD97" if self.query_one("#twd97", Checkbox).value else "TWD67",
-            penghu=self.query_one("#area", Select).value == "penghu",
+            startx=startx,
+            starty=starty,
+            shiftx=shiftx,
+            shifty=shifty,
+            datum=datum,
+            penghu=penghu,
             map_type=str(self.query_one("#map-type", Select).value),
             title=self.query_one("#title", Input).value,
             output=self._form.output,
             gpx=self._form.gpx,
+            label_trk=1 if label_trk else 0,
+            label_wpt=1 if label_wpt else 0,
             keep_color=self.query_one("#keep-color", Checkbox).value,
             grid_100m=self.query_one("#grid-100m", Checkbox).value,
             include_tracks=self.query_one("#include-tracks", Checkbox).value,
@@ -725,6 +807,41 @@ class MapGenApp(App[None]):
                 proc.kill()
 
 
+def _prefill_from_gpx(argv: list[str]) -> tuple[list[str], bool, object | None]:
+    """Extract ``--from-gpx <file>`` / ``--datum`` and synthesize prefill args.
+
+    Returns ``(remaining_args, region_locked, GpxRegion|None)``. When a GPX
+    file is given, ``remaining_args`` contains the rest of the caller's flags
+    plus ``--region <spec>`` and ``--title <suggested>`` (derived from the
+    file) and, unless the caller already passed ``--gpx``, ``--gpx <path>``.
+    Precedence (argparse keeps the last occurrence of a flag): the derived
+    ``--region`` is placed last so it always wins over an explicit ``--region``
+    and keeps the map matching the track; the derived ``--title``/``--gpx``/
+    ``--penghu`` are placed first so an explicit caller flag still wins.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(add_help=False, prog="mapgen-tui")
+    parser.add_argument("--from-gpx", dest="gpx_path")
+    parser.add_argument("--datum", default="TWD67", choices=("TWD67", "TWD97"))
+    ns, rest = parser.parse_known_args(argv)
+    rest = [
+        a for a in rest
+        if not a.startswith(("--from-gpx", "--datum"))
+    ]
+    if not ns.gpx_path:
+        return rest, False, None
+    reg = region_from_gpx(ns.gpx_path, datum=ns.datum)
+    pre: list[str] = []
+    if "--gpx" not in rest:
+        pre += ["--gpx", str(ns.gpx_path)]
+    if reg.penghu:
+        pre += ["--penghu", "1"]
+    if "--title" not in rest and "-t" not in rest:
+        pre += ["--title", reg.title]
+    return pre + rest + ["--region", reg.spec], True, reg
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(argv) if argv is not None else sys.argv[1:]
     if "-h" in args or "--help" in args:
@@ -732,16 +849,24 @@ def main(argv: list[str] | None = None) -> int:
             "mapgen-tui — interactive Taiwan map generator.\n"
             "Any 'mapgen make' flag may be passed to prefill the form; what you "
             "leave out keeps its default (e.g. -v 3 -t 合歡山 -p 1).\n"
+            "--from-gpx <file.gpx> [--datum TWD67|TWD97] computes the region\n"
+            "from a GPX file (Taiwan/Penghu auto), centres it on the track with\n"
+            ">=1km margin on A4 5x7 km pages, and prefills the form/title.\n"
             "In the UI: ctrl+r runs, f1 shows help, ctrl+q quits and prints the "
             "previewed command; Run executes it in a live output window."
         )
         return 0
+    try:
+        args, region_locked, gpx_reg = _prefill_from_gpx(args)
+    except ValueError as exc:
+        print(f"mapgen-tui: {exc}", file=sys.stderr)
+        return 2
     form, errors = parse_cli_args(args)
     if errors:
         for err in errors:
             print(f"mapgen-tui: {err}", file=sys.stderr)
         return 2
-    app = MapGenApp(form=form)
+    app = MapGenApp(form=form, region_locked=region_locked, gpx_reg=gpx_reg)
     app.run()
     if app._exit_message:
         print(app._exit_message)

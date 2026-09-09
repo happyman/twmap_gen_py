@@ -514,3 +514,152 @@ async def test_app_header_shows_program_info_and_help():
         await pilot.press("escape")
         await pilot.pause()
         assert not any(isinstance(w, HelpScreen) for w in app.screen_stack)
+
+
+def _write_gpx(tmp_path, name="track.gpx") -> str:
+    path = tmp_path / name
+    path.write_text(
+        """<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="pytest">
+  <metadata><name>test</name></metadata>
+  <wpt lat="24.08" lon="121.16"><name>start</name></wpt>
+  <trk><trkseg>
+    <trkpt lat="24.13" lon="121.19"><ele>3000</ele></trkpt>
+    <trkpt lat="24.10" lon="121.18"></trkpt>
+  </trkseg></trk>
+</gpx>
+""",
+        encoding="utf-8",
+    )
+    return str(path)
+
+
+def test_prefill_from_gpx_synthesizes_region_and_gpx(tmp_path):
+    from mapgen.tui.app import _prefill_from_gpx
+
+    gpx = _write_gpx(tmp_path)
+    args, locked, reg = _prefill_from_gpx(["--from-gpx", gpx, "-t", "合歡山"])
+    assert locked is True
+    assert reg is not None
+    assert "--from-gpx" not in args
+    assert "--gpx" in args and args[args.index("--gpx") + 1] == gpx
+    assert "--region" in args
+    region = args[args.index("--region") + 1]
+    assert region == reg.spec
+    assert "-t" in args and args[args.index("-t") + 1] == "合歡山"
+
+    form, errors = parse_cli_args(args)
+    assert errors == []
+    assert form.gpx == gpx
+    assert int(form.startx) == reg.x0 // 1000
+
+
+def test_prefill_from_gpx_respects_existing_gpx_flag(tmp_path):
+    from mapgen.tui.app import _prefill_from_gpx
+
+    gpx = _write_gpx(tmp_path)
+    args, locked, _ = _prefill_from_gpx(
+        ["--from-gpx", gpx, "--gpx", f"{gpx}:3:4"]
+    )
+    assert locked is True
+    gpx_flags = [args[i + 1] for i, a in enumerate(args) if a == "--gpx"]
+    assert gpx_flags.count(f"{gpx}:3:4") == 1
+    form, _ = parse_cli_args(args)
+    assert form.label_trk == 3 and form.label_wpt == 4
+
+
+def test_prefill_from_gpx_region_beats_explicit_region(tmp_path):
+    from mapgen.tui.app import _prefill_from_gpx
+
+    gpx = _write_gpx(tmp_path)
+    args, locked, reg = _prefill_from_gpx(["--region", "100:100:2:2", "--from-gpx", gpx])
+    assert locked is True
+    form, errors = parse_cli_args(args)
+    assert errors == []
+    assert int(form.startx) == reg.x0 // 1000
+    assert int(form.starty) == reg.y0 // 1000
+
+
+def test_prefill_from_gpx_title_from_filename_stem(tmp_path):
+    from mapgen.tui.app import _prefill_from_gpx
+
+    gpx = _write_gpx(tmp_path)  # track has no name
+    args, locked, _ = _prefill_from_gpx(["--from-gpx", gpx])
+    assert locked is True
+    form, errors = parse_cli_args(args)
+    assert errors == []
+    assert form.title == "track"
+
+
+def test_prefill_from_gpx_title_respects_explicit_title(tmp_path):
+    from mapgen.tui.app import _prefill_from_gpx
+
+    gpx = _write_gpx(tmp_path)
+    args, locked, _ = _prefill_from_gpx(["--from-gpx", gpx, "-t", "自訂標題"])
+    assert locked is True
+    form, errors = parse_cli_args(args)
+    assert errors == []
+    assert form.title == "自訂標題"
+
+
+@pytest.mark.asyncio
+async def test_app_from_gpx_locks_region_and_updates_gpx_labels(tmp_path):
+    from textual.app import NoMatches
+    from textual.widgets import Checkbox, Static
+
+    from mapgen.tui.app import MapGenApp, _prefill_from_gpx
+
+    gpx = _write_gpx(tmp_path)
+    args, _, reg = _prefill_from_gpx(["--from-gpx", gpx])
+    form, errors = parse_cli_args(args)
+    assert errors == []
+
+    async with MapGenApp(
+        form=form, region_locked=True, gpx_reg=reg
+    ).run_test(size=(160, 48)) as pilot:
+        app = pilot.app
+        await pilot.pause()
+
+        # region section is hidden, GPX section is shown
+        with pytest.raises(NoMatches):
+            app.query_one("#coord1")
+        with pytest.raises(NoMatches):
+            app.query_one("#startx")
+        assert "track.gpx" in str(app.query_one("#gpx-info", Static).content)
+
+        # toggling 航跡標記/航點標記 reflects into the previewed --gpx spec
+        assert app.query_one("#label-trk", Checkbox).value is False
+        assert app.query_one("#label-wpt", Checkbox).value is False
+        await pilot.click("#label-trk")
+        await pilot.pause()
+        assert not app.query_one("#run").disabled
+        assert f"{gpx}:1:0" in str(app.query_one("#preview", Static).content)
+        await pilot.click("#label-wpt")
+        await pilot.pause()
+        assert f"{gpx}:1:1" in str(app.query_one("#preview", Static).content)
+
+
+@pytest.mark.asyncio
+async def test_app_from_gpx_shows_gpx_section_with_filename(tmp_path):
+    from textual.widgets import Static
+
+    from mapgen.gpx_region import region_from_gpx
+    from mapgen.tui.app import MapGenApp, _prefill_from_gpx
+
+    gpx = _write_gpx(tmp_path)
+    reg = region_from_gpx(gpx, datum="TWD67")
+    args, _, _ = _prefill_from_gpx(["--from-gpx", gpx, "--datum", "TWD67"])
+    form, errors = parse_cli_args(args)
+    assert errors == []
+
+    async with MapGenApp(
+        form=form, region_locked=True, gpx_reg=reg
+    ).run_test(size=(160, 48)) as pilot:
+        app = pilot.app
+        await pilot.pause()
+        info = str(app.query_one("#gpx-info", Static).content)
+        assert "track.gpx" in info
+        assert "1 軌跡" in info
+        assert "WGS84" in info
+        assert reg.spec in str(app.query_one("#preview", Static).content)
+        assert "--gpx" in str(app.query_one("#preview", Static).content)
