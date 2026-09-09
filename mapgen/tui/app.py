@@ -216,6 +216,8 @@ Run 先顯示確認框，執行期間於浮動視窗即時顯示輸出；
 結束後按 OK 離開並列出輸出目錄產出的檔案。
 
 任何 [b]mapgen make[/b] 旗標都可預填表單，例：[b]mapgen-tui -t 合歡山 -v 3[/b]。
+自訂字型用 [b]--font-path /path/to/font.ttf[/b]（預設使用內建的
+wqy-microhei，輸出跨平台一致）。
 以 [b]--from-gpx 檔案.gpx [--datum TWD67|TWD97][/b] 啟動時，範圍自動由
 GPX 決定（台灣/澎湖自動），以軌跡為中心、至少 1km 邊距、對齊 A4 5x7 km
 頁面；標題自動取軌跡名稱（否則檔名）。勾選 '航跡標記/航點標記' 即可

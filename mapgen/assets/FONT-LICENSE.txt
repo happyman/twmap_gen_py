@@ -1,0 +1,8 @@
+wqy-microhei.ttc — WenQuanYi Micro Hei
+
+Bundled so generated maps render identically on every platform, regardless
+of the fonts installed on the OS.
+
+License : Apache License 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
+Upstream: https://sourceforge.net/projects/wqy/ (WenQuanYi Micro Hei)
+Copyright (c) 2008-2010, FANG Qiang <fqiang@cpan.org> and contributing authors.

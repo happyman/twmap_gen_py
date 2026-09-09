@@ -196,6 +196,7 @@ def render_overlay_to_image(
     width_px: int,
     height_px: int,
     draw_labels: bool = True,
+    font_path: str | None = None,
 ) -> np.ndarray:
     """Render the GPX overlay directly to a transparent RGBA numpy array.
 
@@ -234,12 +235,12 @@ def render_overlay_to_image(
     # Track name label at the first point
     if draw_labels and ov.label_trk and ov.track_segments:
         x, y, _ = ov.track_segments[0][0]
-        font = _default_font(_FONT_SIZE)
+        font = _default_font(_FONT_SIZE, font_path)
         label = ov.label_trk_text or str(ov.label_trk)
         draw.text((x + 8, y - 8), label, font=font, fill=(0, 0, 0, 255))
 
     # Waypoints
-    font = _default_font(_FONT_SIZE)
+    font = _default_font(_FONT_SIZE, font_path)
     for i, wpt in enumerate(ov.waypoints):
         x, y = wpt["px"]
         # Black filled circle with thin outline

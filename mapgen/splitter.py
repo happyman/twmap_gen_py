@@ -184,6 +184,7 @@ def make_simage(
     px_per_km: float,
     grid_info=None,
     index_img: np.ndarray | None = None,
+    font_path: str | None = None,
 ) -> np.ndarray:
     """Fit a page image onto a paper pixel canvas at a fixed print scale.
 
@@ -231,13 +232,15 @@ def make_simage(
     out = np.array(canvas)
 
     if grid_info is not None:
-        out = _add_borders(out, grid_info)
+        out = _add_borders(out, grid_info, font_path=font_path)
     if index_img is not None:
         out = _overlay_index(out, index_img)
     return out
 
 
-def _add_borders(img: np.ndarray, grid_info) -> np.ndarray:
+def _add_borders(
+    img: np.ndarray, grid_info, font_path: str | None = None
+) -> np.ndarray:
     """Add paste-alignment markers and grid index to a page image."""
     from PIL import Image, ImageDraw
 
@@ -246,7 +249,7 @@ def _add_borders(img: np.ndarray, grid_info) -> np.ndarray:
     im = Image.fromarray(img if img.ndim == 3 else np.stack([img] * 3, -1))
     w, h = im.size
     draw = ImageDraw.Draw(im)
-    font = _default_font(32)
+    font = _default_font(32, font_path)
 
     row, col, total_cols, total_rows = (
         grid_info.get("row", 0),

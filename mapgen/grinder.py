@@ -12,12 +12,54 @@ Coordinate tag layout (matching PHP ``im_tagimage``):
 from __future__ import annotations
 
 import logging
+import subprocess
+from importlib.resources import files
 from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 logger = logging.getLogger(__name__)
+
+# CJK font bundled with the package so output is identical on every platform,
+# regardless of which fonts the OS has installed.
+_BUNDLED_FONT_NAME = "wqy-microhei.ttc"
+
+# Well-known CJK font paths checked before falling back to fontconfig.
+_CJK_FONT_PATHS = [
+    "/usr/share/fonts/opentype/noto/NotoSerifCJKtc-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttf",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "/usr/share/fonts/wenquanyi/wqy-zenhei/wqy-zenhei.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+    "/usr/share/fonts/truetype/arphic/ukai.ttc",
+    "/usr/share/fonts/truetype/arctechnicon/source-han-sans/tc/SourceHanSansTC-Regular.otf",
+]
+_FONT_DIRS = [
+    "/usr/share/fonts",
+    "/usr/local/share/fonts",
+    "~/.local/share/fonts",
+    "~/.fonts",
+]
+_CJK_FONT_PATTERNS = (
+    "*CJK*",
+    "*Noto*",
+    "*wqy*",
+    "*zenhei*",
+    "*DroidSansFallback*",
+    "*SourceHan*",
+    "*AK.ttc",
+)
+FONT_MISSING_HELP = (
+    "No CJK-capable font found (bundled font missing too). Install one (e.g. "
+    "package 'fonts-noto-cjk' or 'wqy-zenhei') so the title/logo and paste "
+    "text render, or pass --font-path /path/to/a/CJK/font.ttf."
+)
+
 
 # Pixel step between grid lines
 def grid_step_px(px_per_km: float, step_m: int) -> float:
@@ -64,19 +106,109 @@ def _draw_lines(
     return np.array(out)
 
 
-def _default_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """Find a default font, preferring a found CJK-capable TTF."""
-    candidates = [
-        "/usr/share/fonts/opentype/noto/NotoSerifCJKtc-Regular.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-        "/usr/share/fonts/wenquanyi/wqy-zenhei/wqy-zenhei.ttc",
-    ]
-    for path in candidates:
-        if Path(path).exists():
+def _candidate_fonts() -> list[str]:
+    """Well-known CJK font files that exist on disk."""
+    return [p for p in _CJK_FONT_PATHS if Path(p).exists()]
+
+
+def _bundled_font_path() -> str | None:
+    """Path to the CJK font shipped inside the package.
+
+    Resolved via :mod:`importlib.resources` so it works both from a source
+    checkout and from an installed wheel. Falls back to a plain relative path
+    for unusual installs.
+    """
+    try:
+        ref = files("mapgen") / "assets" / _BUNDLED_FONT_NAME
+        if ref.is_file():
+            return str(ref)
+    except (Exception, OSError):  # noqa: S110 - any resolution failure is fine
+        pass
+    alt = Path(__file__).resolve().parent / "assets" / _BUNDLED_FONT_NAME
+    return str(alt) if alt.exists() else None
+
+
+def _fc_match_font() -> str | None:
+    """Ask fontconfig for a CJK-capable sans-serif font file, if installed."""
+    fc_match = Path("/usr/bin/fc-match")
+    if not fc_match.exists():  # pragma: no cover - fontconfig absent
+        return None
+    try:
+        out = subprocess.run(  # noqa: S603 - trusted, fixed path
+            [str(fc_match), "-f", "%{file}", "sans-serif:lang=zh-tw"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):  # noqa: S110
+        return None
+    path = (out.stdout or "").strip()
+    return path if path and Path(path).exists() else None
+
+
+def _scan_fonts(max_files: int = 256) -> str | None:  # pragma: no cover
+    """Bounded scan of font dirs for CJK-ish font files (slowest fallback)."""
+    seen = 0
+    for base in _FONT_DIRS:
+        root = Path(base).expanduser()
+        if not root.is_dir():
+            continue
+        for pattern in _CJK_FONT_PATTERNS:
+            try:
+                matches = root.rglob(pattern)
+                for p in matches:
+                    seen += 1
+                    if p.is_file():
+                        return str(p)
+                    if seen >= max_files:
+                        return None
+            except OSError:
+                continue
+    return None
+
+
+def _default_font(
+    size: int,
+    font_path: str | None = None,
+) -> ImageFont.FreeTypeFont:
+    """Load a CJK-capable font for map text.
+
+    Tries, in order: an explicit ``font_path`` (must exist), the bundled
+    ``wqy-microhei.ttc`` (so output is uniform across platforms), well-known
+    system CJK fonts, fontconfig (``fc-match``), and finally a bounded scan of
+    font directories. Raises :class:`RuntimeError` with install guidance when
+    no CJK font can be found — the old ``ImageFont.load_default()`` fallback
+    silently rendered Chinese title/paste text blank.
+    """
+    if font_path:
+        p = Path(font_path)
+        if not p.exists():
+            raise ValueError(f"font file does not exist: {font_path}")
+        return ImageFont.truetype(str(p), size)
+
+    bundled = _bundled_font_path()
+    if bundled:
+        return ImageFont.truetype(bundled, size)
+
+    for path in _candidate_fonts():
+        try:
             return ImageFont.truetype(path, size)
-    return ImageFont.load_default()
+        except OSError:
+            continue
+
+    matched = _fc_match_font()
+    if matched:
+        try:
+            return ImageFont.truetype(matched, size)
+        except OSError:
+            pass
+
+    scanned = _scan_fonts()
+    if scanned:
+        try:
+            return ImageFont.truetype(scanned, size)
+        except OSError:
+            pass
+
+    raise RuntimeError(FONT_MISSING_HELP)
 
 
 def tag_coordinates(
@@ -87,6 +219,7 @@ def tag_coordinates(
     label_color=(0, 0, 0),
     stroke_color=(255, 255, 255),
     stroke_width: int = 2,
+    font_path: str | None = None,
 ) -> np.ndarray:
     """Add TWD coordinate labels around all four edges of the image.
 
@@ -102,7 +235,7 @@ def tag_coordinates(
     w, h = out.size
     if font_size is None:
         font_size = 44 if px_per_km >= 630 else 22
-    font = _default_font(font_size)
+    font = _default_font(font_size, font_path)
     draw = ImageDraw.Draw(out)
 
     step_px = px_per_km  # 1km => px_per_km pixels
@@ -219,10 +352,7 @@ def composite_logo(
     """
     out = _as_rgba_image(img)
     w, h = out.size
-    if font_path:
-        font = ImageFont.truetype(font_path, font_size)
-    else:
-        font = _default_font(font_size)
+    font = _default_font(font_size, font_path)
     draw = ImageDraw.Draw(out)
     if line_spacing is None:
         line_spacing = max(6, int(font_size * 0.6))

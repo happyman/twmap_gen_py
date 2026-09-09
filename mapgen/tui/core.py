@@ -78,6 +78,7 @@ class MapForm:
     include_tracks: bool = False
     a3: bool = False
     dims: list[str] = field(default_factory=list)
+    font_path: str = ""
 
     @property
     def region(self) -> str:
@@ -178,6 +179,8 @@ def to_argv(form: MapForm, output_dir: str | None = None) -> list[str]:
         argv.append("--include-tracks")
     if form.a3:
         argv.append("--a3")
+    if form.font_path:
+        argv.extend(["--font-path", form.font_path])
     for dim in ["5x7", *form.dims]:
         argv.extend(["--dims", dim])
     return argv
@@ -264,6 +267,8 @@ def parse_cli_args(argv: list[str]) -> tuple[MapForm, list[str]]:
         form.penghu = True
     if _changed("dims") and args.dims:
         form.dims = list(args.dims)
+    if _changed("font_path"):
+        form.font_path = args.font_path or ""
     return form, errors
 
 

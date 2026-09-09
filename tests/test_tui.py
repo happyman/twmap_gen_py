@@ -210,6 +210,12 @@ def test_parse_cli_args_unknown_flag():
     assert "--bogus" in errors[0]
 
 
+def test_parse_cli_args_font_path_accepted():
+    form, errors = parse_cli_args(["--font-path", "/custom/wqy.ttc"])
+    assert not errors
+    assert form.font_path == "/custom/wqy.ttc"
+
+
 # --- Textual app behavior ---
 
 

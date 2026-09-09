@@ -98,6 +98,14 @@ def _add_make_args(p: argparse.ArgumentParser, legacy: bool) -> None:
     )
     p.add_argument("--title", "-t", default="我的地圖", help="Map title")
     p.add_argument(
+        "--font-path",
+        default=None,
+        help=(
+            "Path to a CJK-capable TTF/OTC/OTF for the logo, paste text and "
+            "GPX labels (default: auto-detect a system font)"
+        ),
+    )
+    p.add_argument(
         "--keep-color",
         "-c",
         action="store_true",
@@ -313,7 +321,8 @@ def cmd_make(args) -> None:
         _report(notifier, "step:style")
         decor_ops = _decor_ops(region, source, args)
         gpx_op = (
-            [("gpx", lambda im: _apply_gpx_to_base(im, region, source, gpx_param))]
+            [("gpx", lambda im: _apply_gpx_to_base(
+                im, region, source, gpx_param, font_path=args.font_path))]
             if gpx_param
             else []
         )
@@ -587,14 +596,17 @@ def _decor_ops(region, source, args) -> list[tuple[str, object]]:
     """
     from .grinder import composite_logo, draw_grid_lines, tag_coordinates
 
+    font_path = args.font_path
     ops = []
     if args.grid_100m:
         ops.append(("grid100", lambda im: draw_grid_lines(im, source.pixel_per_km, step_m=100)))
     # 1000m grid is always drawn except v3+TWD67
     if not (args.map_type == "3" and region.datum == "TWD67"):
         ops.append(("grid1000", lambda im: draw_grid_lines(im, source.pixel_per_km, step_m=1000)))
-    ops.append(("logo", lambda im: composite_logo(im, f"{region.datum}\n{source.label}")))
-    ops.append(("tags", lambda im: tag_coordinates(im, region, source.pixel_per_km)))
+    ops.append(("logo", lambda im: composite_logo(
+        im, f"{region.datum}\n{source.label}", font_path=font_path)))
+    ops.append(("tags", lambda im: tag_coordinates(
+        im, region, source.pixel_per_km, font_path=font_path)))
     return ops
 
 
@@ -628,7 +640,7 @@ def _parse_gpx_arg(gpx_spec: str) -> dict:
     return {"path": path, "label_trk": label_trk, "label_wpt": label_wpt}
 
 
-def _apply_gpx_to_base(img, region, source, gpx_param) -> np.ndarray:
+def _apply_gpx_to_base(img, region, source, gpx_param, font_path: str | None = None) -> np.ndarray:
     """Parse the GPX, render its overlay, and alpha-composite it onto the image."""
     from .gpx2svg import apply_gpx_overlay, parse_gpx, render_overlay_to_image
 
@@ -641,7 +653,7 @@ def _apply_gpx_to_base(img, region, source, gpx_param) -> np.ndarray:
         label_trk=gpx_param["label_trk"],
         label_wpt=gpx_param["label_wpt"],
     )
-    overlay = render_overlay_to_image(ov, width_px, height_px)
+    overlay = render_overlay_to_image(ov, width_px, height_px, font_path=font_path)
     composed = apply_gpx_overlay(img, overlay)
     logger.info("GPX overlay applied (%d segments, %d waypoints)",
                 len(ov.track_segments), len(ov.waypoints))
@@ -789,6 +801,7 @@ def _handle_export(
                     "total_cols": cols,
                     "total_rows": rows,
                 },
+                font_path=args.font_path,
             )
             pf = outdir / f"{prefix}_{dim}_{i + 1}.png"
             _save_png(page_img, pf)
