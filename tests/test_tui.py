@@ -98,6 +98,8 @@ def test_command_line_is_shell_quoted():
     line = command_line(form, output_dir="out/auto")
     assert "'我的地圖'" in line
     assert "mapgen make --region" in line
+    # prefix with `uv run` so the line is copy-pasteable from a source checkout
+    assert line.startswith("uv run mapgen make --region")
 
 
 def test_validate_accepts_valid_form():
@@ -230,6 +232,7 @@ async def test_app_preview_tracks_inputs():
         app = pilot.app
         preview = app.query_one("#preview", Static)
         assert "mapgen make" in str(preview.content)
+        assert str(preview.content).startswith("uv run mapgen make")
         # Default region is km 236,2578 -> metres with TWD67
         assert "236000,2578000,3,3,TWD67" in str(preview.content)
 
@@ -328,10 +331,11 @@ async def test_app_quit_prints_command_line():
         app = pilot.app
         await pilot.pause()
         cmd = str(app.query_one("#preview", Static).content)
-        assert "mapgen make" in cmd
+        assert cmd.startswith("uv run mapgen make")
         await pilot.press("ctrl+q")
         await pilot.pause()
     assert app._exit_message is not None
+    assert app._exit_message.startswith(("尚未執行。預覽指令:\nuv run mapgen make"))
     assert "mapgen make" in app._exit_message
     assert "236000,2578000,3,3,TWD67" in app._exit_message
 

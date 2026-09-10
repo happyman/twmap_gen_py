@@ -46,6 +46,7 @@ from .. import __version__
 from ..config import list_sources
 from ..gpx_region import region_from_gpx
 from .core import (
+    COMMAND_PREFIX,
     DEFAULT_TITLE,
     EXTRA_DIMS,
     MapForm,
@@ -63,7 +64,13 @@ SOURCE_LABELS = {k: f"{k} — {src.label}" for k, src in list_sources()}
 
 
 def _cmd_text(argv: list[str]) -> str:
-    return " ".join(shlex.quote(a) for a in argv)
+    """Render ``argv`` as one shell line for display; prefix with ``uv run``.
+
+    Keeps every previewed command copy-pasteable from a source checkout while
+    preserving the ``_sys_args`` (the literal ``mapgen make ...`` argv) used to
+    actually launch the subprocess.
+    """
+    return " ".join(shlex.quote(a) for a in [*COMMAND_PREFIX, *argv])
 
 
 def _fmt_num(value: float | int) -> str:

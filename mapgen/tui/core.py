@@ -21,6 +21,10 @@ from pathlib import Path
 
 from ..config import PAPER_TYPES, TAIWAN_BOUNDS, list_sources
 
+# ``mapgen`` is not on PATH in a source checkout, so the previewed command is
+# prefixed with ``uv run`` to make it copy-pasteable.
+COMMAND_PREFIX = ["uv", "run"]
+
 ALL_DIMS = sorted(PAPER_TYPES["A4"]["dimensions"])
 EXTRA_DIMS = ["4x6", "3x4", "2x3"]
 ALL_DATUMS = ("TWD97", "TWD67")
@@ -187,10 +191,15 @@ def to_argv(form: MapForm, output_dir: str | None = None) -> list[str]:
 
 
 def command_line(form: MapForm, output_dir: str | None = None) -> str:
-    """The ``mapgen make ...`` command as a single shell line for preview/copy."""
+    """The full ``mapgen make ...`` command as a single copy-pasteable line.
+
+    Prefixes the argv with ``uv run`` because ``mapgen`` is not on PATH in a
+    source checkout; pasting the line at the project root just works.
+    """
     import shlex
 
-    return " ".join(shlex.quote(a) for a in to_argv(form, output_dir=output_dir))
+    argv = [*COMMAND_PREFIX, *to_argv(form, output_dir=output_dir)]
+    return " ".join(shlex.quote(a) for a in argv)
 
 
 def with_overrides(form: MapForm, **kwargs) -> MapForm:
