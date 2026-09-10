@@ -43,6 +43,20 @@ class InvalidInput(Exception):
     """Permanent input validation error (exit code 3, no retry by worker)."""
 
 
+# Catchable termination signals that would otherwise bypass Python's
+# try/finally cleanup. SIGTERM/SIGHUP cover POSIX external kills; SIGBREAK
+# covers Windows Ctrl+Break. Absent signals are skipped (SIGHUP/SIGBREAK are
+# not defined everywhere), so this stays a no-op on platforms lacking them.
+_CLEANUP_SIGNALS = ("SIGTERM", "SIGHUP", "SIGBREAK")
+
+
+def _install_signal_cleanup(handler) -> None:
+    """Register ``handler`` for every available _CLEANUP_SIGNALS signal."""
+    for _signame in _CLEANUP_SIGNALS:
+        if hasattr(signal, _signame):
+            signal.signal(getattr(signal, _signame), handler)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mapgen",
@@ -326,12 +340,13 @@ def cmd_make(args) -> None:
     workdir = Path(tempfile.mkdtemp(dir=str(tmpdir), prefix="twmap_"))
     keep_tmp = bool(getattr(args, "keep_tmp", False))
 
-    # Fatal-signal cleanup: SIGTERM/SIGHUP kill the process before Python's
-    # try/finally can run, leaving the temp workdir behind. Catch them, remove
-    # the workdir (unless --keep-tmp), then re-raise with the default handler
-    # so the exit status still reports the signal. SIGINT already unwinds as
-    # KeyboardInterrupt through the finally below (uncatchable SIGKILL/segfault
-    # can still leave stale dirs, cleared on the next boot of /dev/shm).
+    # Fatal-signal cleanup: SIGTERM/SIGHUP/SIGBREAK kill the process before
+    # Python's try/finally can run, leaving the temp workdir behind. Catch
+    # them, remove the workdir (unless --keep-tmp), then re-raise with the
+    # default handler so the exit status still reports the signal. SIGINT
+    # already unwinds as KeyboardInterrupt through the finally below.
+    # Uncatchable kills (SIGKILL/segfault, Windows TerminateProcess) can still
+    # leave stale dirs, cleared on the next boot of /dev/shm.
     def _signal_cleanup(signum: int, _frame) -> None:
         if not keep_tmp:
             import shutil
@@ -340,9 +355,7 @@ def cmd_make(args) -> None:
         signal.signal(signum, signal.SIG_DFL)
         os.kill(os.getpid(), signum)
 
-    for _signame in ("SIGTERM", "SIGHUP"):
-        if hasattr(signal, _signame):
-            signal.signal(getattr(signal, _signame), _signal_cleanup)
+    _install_signal_cleanup(_signal_cleanup)
 
     try:
         logger.info("Generating %s over %s", source.name, region)

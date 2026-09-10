@@ -442,6 +442,43 @@ def test_keep_tmp_defaults_to_false():
     assert args.keep_tmp is False
 
 
+class _FakeSignal:
+    """Stands in for the real ``signal`` module without touching the process."""
+
+    def __init__(self, *names):
+        self._signals = {}
+        self._installed = []
+        self.SIG_DFL = "SIG_DFL"
+        for i, name in enumerate(names):
+            setattr(self, name, i + 1)
+
+    def signal(self, signum, handler):
+        self._installed.append((signum, handler))
+
+
+@pytest.mark.parametrize(
+    "signals,expected",
+    [
+        (("SIGTERM", "SIGHUP", "SIGBREAK"), ("SIGTERM", "SIGHUP", "SIGBREAK")),
+        (("SIGTERM", "SIGBREAK"), ("SIGTERM", "SIGBREAK")),  # POSIX: no SIGBREAK
+        (("SIGTERM",), ("SIGTERM",)),  # Windows-like: no SIGHUP
+    ],
+)
+def test_install_signal_cleanup_registers_what_exists(
+    monkeypatch, signals, expected
+):
+    """Handlers go to every signal the platform defines; missing ones skipped."""
+    fake = _FakeSignal(*signals)
+    monkeypatch.setattr(cli, "signal", fake)
+
+    sentinel = object()
+    cli._install_signal_cleanup(sentinel)
+
+    assert [(s, h) for s, h in fake._installed] == [
+        (getattr(fake, name), sentinel) for name in expected
+    ]
+
+
 def test_cmd_make_cleans_workdir_by_default(tmp_path, monkeypatch):
     import logging
 
