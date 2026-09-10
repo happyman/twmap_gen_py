@@ -119,15 +119,12 @@ SOURCES: dict[str, MapSource] = {
         name="nlsc",
         label="NLSC",
         tile_url="https://wmts.nlsc.gov.tw/wmts/EMAPX99/default/EPSG:3857/{z}/{y}/{x}",
-        tile_order="yzx",
         zoom=17,
         pixel_per_km=630,
         pre_merge=[Level(0.25, 1.0, 0.1)],
         layers_gpx=[
             LayerDef(
-                url="https://wmts.nlsc.gov.tw/wmts/EMAPX99/default/EPSG:3857/{z}/{y}/{x}",
-                tile_order="yzx",
-                pre_merge=[Level(0.25, 1.0, 0.1)],
+                url="http://make.happyman.idv.tw/map/moi_happyman_nowp_nocache/{z}/{x}/{y}.png",
             ),
             LayerDef(url=_NOWP_GPX),
         ],

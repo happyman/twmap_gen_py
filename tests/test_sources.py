@@ -41,9 +41,9 @@ def test_3_enhanced_grayscale():
     assert s.grayscale_params["brightness"] == 20
 
 
-def test_nlsc_tile_order_yzx():
+def test_nlsc_tile_order_xyz():
     s = get_source("nlsc")
-    assert s.tile_order == "yzx"
+    assert s.tile_order == "xyz"
     assert s.zoom == 17
     assert s.pixel_per_km == 630
 
@@ -74,7 +74,7 @@ def test_layer_defs_gpx_single_source():
 def test_layer_defs_gpx_dual_layer():
     # NLSC / archival maps multiply the archive layer with happyman_nowp.
     for key, k0 in (
-        ("nlsc", "wmts.nlsc.gov.tw"),
+        ("nlsc", "moi_happyman_nowp_nocache"),
         ("1904", "JM20K_1904"),
         ("1916", "JM50K_1916"),
         ("1921", "JM20K_1921"),
@@ -85,9 +85,8 @@ def test_layer_defs_gpx_dual_layer():
         assert k0 in layers[0].url, key
         assert "happyman_nowp" in layers[1].url, key
         assert layers[1].pre_merge in (None, [])
-    # The NLSC archive layer keeps its Level transform in gpx mode; 1921 too.
     nlsc = get_source("nlsc").layer_defs(include_gpx=True)
-    assert len(nlsc[0].pre_merge) >= 1 and nlsc[0].tile_order == "yzx"
+    assert "happyman_nowp" in nlsc[0].url
 
 
 def test_layer_defs_ignores_gpx_without_variant():
