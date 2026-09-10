@@ -21,6 +21,8 @@ import argparse
 import asyncio
 import json
 import logging
+import os
+import signal
 import sys
 import tempfile
 from pathlib import Path
@@ -178,6 +180,11 @@ def _add_make_args(p: argparse.ArgumentParser, legacy: bool) -> None:
             "--tmpdir", "-m", default="/dev/shm", help="Temp directory"
         )
         p.add_argument("--debug", "-d", action="store_true", help="Debug")
+    p.add_argument(
+        "--keep-tmp",
+        action="store_true",
+        help="Leave the temporary workdir behind on exit (for debugging)",
+    )
 
     # WebSocket progress reporting to the frontend.
     p.add_argument(
@@ -317,6 +324,26 @@ def cmd_make(args) -> None:
     _report(notifier, "ps%0")
 
     workdir = Path(tempfile.mkdtemp(dir=str(tmpdir), prefix="twmap_"))
+    keep_tmp = bool(getattr(args, "keep_tmp", False))
+
+    # Fatal-signal cleanup: SIGTERM/SIGHUP kill the process before Python's
+    # try/finally can run, leaving the temp workdir behind. Catch them, remove
+    # the workdir (unless --keep-tmp), then re-raise with the default handler
+    # so the exit status still reports the signal. SIGINT already unwinds as
+    # KeyboardInterrupt through the finally below (uncatchable SIGKILL/segfault
+    # can still leave stale dirs, cleared on the next boot of /dev/shm).
+    def _signal_cleanup(signum: int, _frame) -> None:
+        if not keep_tmp:
+            import shutil
+
+            shutil.rmtree(workdir, ignore_errors=True)
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+
+    for _signame in ("SIGTERM", "SIGHUP"):
+        if hasattr(signal, _signame):
+            signal.signal(getattr(signal, _signame), _signal_cleanup)
+
     try:
         logger.info("Generating %s over %s", source.name, region)
 
@@ -418,11 +445,14 @@ def cmd_make(args) -> None:
     except Exception as exc:  # noqa: BLE001
         logger.error("Fatal: %s", exc, exc_info=True)
         notifier.error(str(exc))
+        if keep_tmp:
+            logger.info("--keep-tmp: leaving workdir at %s", workdir)
         raise
     finally:
-        import shutil
+        if not keep_tmp:
+            import shutil
 
-        shutil.rmtree(workdir, ignore_errors=True)
+            shutil.rmtree(workdir, ignore_errors=True)
         notifier.stop()
 
 

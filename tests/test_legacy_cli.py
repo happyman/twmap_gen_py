@@ -7,8 +7,10 @@ callback, and the Penghu ``p`` filename marker.
 """
 
 import http.server
+import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -397,3 +399,183 @@ def test_notifier_is_loopback_literal():
 
     assert Notifier(url="ws://localhost:9002/x")._is_loopback()
     assert Notifier(url="ws://127.0.0.1:9002/x")._is_loopback()
+
+
+# --------------------------------------------------------------------------
+# temp workdir cleanup (--keep-tmp)
+# --------------------------------------------------------------------------
+
+
+async def _fake_base_image(region, source, workdir, *a, **k):
+    # Write a marker into the workdir so we can detect leaks.
+    workdir.joinpath("tile.png").write_bytes(b"x")
+    import numpy as np
+
+    return np.full((64, 64, 3), 128, np.uint8)
+
+
+def _make_tmp_args(tmpdir, keep=False):
+    args = [
+        "make",
+        "--region",
+        "250000,2743650,1,1,TWD67",
+        "--output",
+        str(tmpdir / "out"),
+        "--map-type",
+        "2016",
+        "--tmpdir",
+        str(tmpdir),
+    ]
+    if keep:
+        args.append("--keep-tmp")
+    return cli.build_parser().parse_args(args)
+
+
+def _leftover_workdirs(tmpdir):
+    return [p for p in Path(tmpdir).glob("twmap_*")]
+
+
+def test_keep_tmp_defaults_to_false():
+    args = cli.build_parser().parse_args(
+        ["make", "--region", "1,2,3,4", "--tmpdir", "/dev/shm"]
+    )
+    assert args.keep_tmp is False
+
+
+def test_cmd_make_cleans_workdir_by_default(tmp_path, monkeypatch):
+    import logging
+
+    import mapgen.stitcher as stitcher
+
+    monkeypatch.setattr(stitcher, "build_base_image", _fake_base_image)
+    logging.disable(logging.CRITICAL)
+    try:
+        args = _make_tmp_args(tmp_path)
+        cli.cmd_make(args)
+        assert _leftover_workdirs(tmp_path) == []
+    finally:
+        logging.disable(logging.NOTSET)
+
+
+def test_cmd_make_keeps_workdir_with_keep_tmp(tmp_path, monkeypatch):
+    import logging
+
+    import mapgen.stitcher as stitcher
+
+    monkeypatch.setattr(stitcher, "build_base_image", _fake_base_image)
+    logging.disable(logging.CRITICAL)
+    try:
+        args = _make_tmp_args(tmp_path, keep=True)
+        cli.cmd_make(args)
+        leftovers = _leftover_workdirs(tmp_path)
+        assert len(leftovers) == 1
+        assert (leftovers[0] / "tile.png").exists()
+    finally:
+        logging.disable(logging.NOTSET)
+
+
+def test_cmd_make_cleans_workdir_on_error(tmp_path, monkeypatch):
+    """A failing run must still remove the temp workdir unless --keep-tmp."""
+    import logging
+
+    import mapgen.stitcher as stitcher
+
+    async def _boom(region, source, workdir, *a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(stitcher, "build_base_image", _boom)
+    logging.disable(logging.CRITICAL)
+    try:
+        args = _make_tmp_args(tmp_path)
+        with pytest.raises(RuntimeError, match="boom"):
+            cli.cmd_make(args)
+        assert _leftover_workdirs(tmp_path) == []
+    finally:
+        logging.disable(logging.NOTSET)
+
+
+def test_cmd_make_keeps_workdir_on_error_with_keep_tmp(tmp_path, monkeypatch):
+    """--keep-tmp must survive a failing run for post-mortem inspection."""
+    import logging
+
+    import mapgen.stitcher as stitcher
+
+    async def _boom(region, source, workdir, *a, **k):
+        workdir.joinpath("crash.dump").write_bytes(b"x")
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(stitcher, "build_base_image", _boom)
+    logging.disable(logging.CRITICAL)
+    try:
+        args = _make_tmp_args(tmp_path, keep=True)
+        with pytest.raises(RuntimeError, match="boom"):
+            cli.cmd_make(args)
+        leftovers = _leftover_workdirs(tmp_path)
+        assert len(leftovers) == 1
+        assert (leftovers[0] / "crash.dump").exists()
+    finally:
+        logging.disable(logging.NOTSET)
+
+
+def _sig_script(tmpdir):
+    return (
+        "import sys, time, asyncio\n"
+        "import mapgen.stitcher as stitcher\n"
+        "\n"
+        "async def _hang(region, source, workdir, *a, **k):\n"
+        f"    with open({str(tmpdir)!r} + '/ready', 'w') as f:\n"
+        "        f.write(str(workdir))\n"
+        "    time.sleep(60)\n"
+        "\n"
+        "stitcher.build_base_image = _hang\n"
+        "from mapgen import cli\n"
+        "args = cli.build_parser().parse_args(sys.argv[1:])\n"
+        "cli.cmd_make(args)\n"
+    )
+
+
+@pytest.mark.parametrize("keep", [False, True])
+def test_cmd_make_cleans_on_sigterm(tmp_path, keep):
+    """SIGTERM (which bypasses Python's try/finally) must still clean up.
+
+    With ``--keep-tmp`` the workdir is left in place for debugging.
+    """
+    import subprocess
+
+    repo = Path(__file__).resolve().parents[1]
+    args = [
+        sys.executable,
+        "-c",
+        _sig_script(tmp_path),
+        "make",
+        "--region",
+        "250000,2743650,1,1,TWD67",
+        "--output",
+        str(tmp_path / "out"),
+        "--map-type",
+        "2016",
+        "--tmpdir",
+        str(tmp_path),
+    ]
+    if keep:
+        args.append("--keep-tmp")
+    proc = subprocess.Popen(args, cwd=repo)
+
+    ready = tmp_path / "ready"
+    import time
+
+    for _ in range(100):
+        if ready.exists():
+            break
+        if proc.poll() is not None:
+            break
+        time.sleep(0.05)
+    assert ready.exists(), "child never reached the hang point"
+    proc.terminate()  # SIGTERM
+    proc.wait(timeout=15)
+
+    leftovers = _leftover_workdirs(tmp_path)
+    if keep:
+        assert len(leftovers) == 1, f"expected one kept workdir, got {leftovers}"
+    else:
+        assert leftovers == [], f"expected cleaned workdir, got {leftovers}"
