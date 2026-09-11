@@ -6,7 +6,7 @@
 
 ## 中文
 
-從各種地圖來源下載圖塊，拼接成有地理座標的馬賽克圖，匯出可列印的 PDF/KMZ/GeoTIFF 地圖（1:25,000 比例尺）。
+從各種地圖來源下載圖磚(map tile)，拼接成有地理座標的馬賽克圖，匯出可列印的 PDF/KMZ/GeoTIFF 地圖（1:25,000 比例尺）。
 
 ### 功能特色
 
@@ -15,8 +15,8 @@
 - GPX 軌跡/航點疊加，支援海拔著色
 - 100m/1000m 格線，標註 TWD97/TWD67 座標
 - 灰階與彩色輸出模式
-- 互動式 TUI（終端機介面）與桌面介面
-- 區域範圍驗證（台灣本島 + 澎湖）
+- 互動式 TUI（終端機介面)
+- 支援區域: 台灣本島 + 澎湖
 - 大範圍自動分塊處理
 
 ### 安裝
@@ -28,8 +28,8 @@
 **Windows：**
 
 1. 下載 `twmap_gen_py-win.zip`，解壓縮
-2. 進入解壓縮後的資料夾，雙擊 `install.bat`
-3. 安裝完成後，雙擊 `mapgen-tui.bat` 啟動
+2. 進入解壓縮後的資料夾，雙點擊 `install.bat`
+3. 安裝完成後，雙點擊 `mapgen-tui.bat` 啟動
 
 **Linux / macOS：**
 
@@ -101,11 +101,11 @@ uv run mapgen list-sources
 
 ### 離開碼（Exit Codes）
 
-| 代碼 | 意義 | Worker 動作 |
+| 代碼 | 意義 | 後端 Worker 動作 |
 |------|------|------------|
 | `0` | 成功 | 完成 |
-| `1` | 暫時性錯誤（網路、圖塊、磁碟） | 重試 |
-| `3` | 永久性輸入錯誤（區域超出範圍、檔案不存在） | **不重試** |
+| `1` | 暫時性錯誤（網磚、圖塊、磁碟） | 重試 |
+| `3` | 輸入錯誤（區域超出範圍、檔案不存在） | **不重試** |
 | `80` | 鍵盤中斷 | — |
 
 後端 Worker 應檢查離開碼 `3`，**不**重試該任務，改為通知使用者。
@@ -137,7 +137,7 @@ Download slippy-map tiles from various Taiwan map sources, stitch them into geor
 - 100m/1000m grid lines with TWD97/TWD67 coordinate labels
 - Grayscale and color output modes
 - Interactive TUI (terminal UI) and desktop UI
-- Region bounds validation (Taiwan + Penghu)
+- Region bounds to Taiwan + Penghu
 - Auto-chunking for large regions
 
 ### Installation
@@ -185,10 +185,10 @@ mapgen-tui.bat      # Windows
 
 ```bash
 # Generate a map (comma format: x0,y0 in metres, shiftx/shifty in km)
-uv run mapgen make --region 274000,2639000,3,3 --title "合歡山"
+uv run mapgen make --region 274000,2639000,3,3 --title "JadeMountain"
 
 # Legacy colon format (startx/starty in km)
-uv run mapgen make -r 274:2639:3:3 -t "合歡山"
+uv run mapgen make -r 274:2639:3:3 -t "JadeMountain"
 
 # With options
 uv run mapgen make -r 274:2639:3:3 -v 2016 -c -e --a3
