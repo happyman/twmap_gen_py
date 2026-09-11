@@ -3,6 +3,16 @@
 New Pythonic interface (``mapgen make ...``) plus legacy ``cmd_make2.py``
 -compatible aliases (-r/-O/-v/-g/-e/-G/-3/-D/-c/-p). Also provides helpers:
 ``list-sources``, ``test-source``, ``compare-sources``.
+
+Exit codes (used by the backend worker to decide whether to retry):
+
+- **0** ``EXIT_OK`` – success.
+- **1** ``EXIT_ERROR`` – transient failure (network, tile download, disk, …);
+  the worker should release the job back to the queue for retry.
+- **3** ``EXIT_INVALID_INPUT`` – permanent input validation error (region out
+  of bounds, bad ``--region`` format, missing GPX file, unknown source, …);
+  the worker must **not** retry — notify the user instead.
+- **80** – keyboard interrupt.
 """
 
 from __future__ import annotations
@@ -20,6 +30,15 @@ import numpy as np
 from . import __version__
 
 logger = logging.getLogger("mapgen")
+
+# Exit codes — the backend worker uses these to decide whether to retry.
+EXIT_OK = 0
+EXIT_ERROR = 1              # transient failure (network, tiles, disk) → retry
+EXIT_INVALID_INPUT = 3      # permanent failure (bad region, missing file) → no retry
+
+
+class InvalidInput(Exception):
+    """Permanent input validation error (exit code 3, no retry by worker)."""
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -213,7 +232,7 @@ def _parse_region(spec: str) -> dict:
     sep = ":" if is_colon else ","
     parts = [p for p in spec.split(sep) if p != ""]
     if len(parts) not in (4, 5):
-        raise SystemExit(
+        raise InvalidInput(
             f"Invalid region: {spec!r}. Use x0,y0,shiftx,shifty[,datum] "
             "or legacy x0:y0:shiftx:shifty:datum"
         )
@@ -231,7 +250,7 @@ def _region_from_args(args):
 
     spec = args.region
     if spec is None:
-        raise SystemExit("--region/-r is required")
+        raise InvalidInput("--region/-r is required")
     p = _parse_region(spec)
     # shiftx/shifty are in 1-km units; region spans them
     region = Region(
@@ -244,7 +263,7 @@ def _region_from_args(args):
     )
     errors = validate_region_bounds(region, penghu=bool(args.penghu))
     if errors:
-        raise SystemExit(
+        raise InvalidInput(
             "Region out of bounds:\n  " + "\n  ".join(errors)
         )
     return region
@@ -643,7 +662,7 @@ def _parse_gpx_arg(gpx_spec: str) -> dict:
     label_trk = int(parts[1]) if len(parts) > 1 and parts[1] else 0
     label_wpt = int(parts[2]) if len(parts) > 2 and parts[2] else 0
     if not Path(path).exists():
-        raise SystemExit(f"unable to read gpx file: {path}")
+        raise InvalidInput(f"unable to read gpx file: {path}")
     return {"path": path, "label_trk": label_trk, "label_wpt": label_wpt}
 
 
@@ -959,7 +978,7 @@ def cmd_compare_sources(args) -> None:
 
     keys = [k.strip() for k in args.sources.split(",") if k.strip()]
     if not keys:
-        raise SystemExit("No sources to compare")
+        raise InvalidInput("No sources to compare")
     p = _parse_region(args.region)
     region = Region(
         x0=p["x0"], y0=p["y0"],
@@ -969,7 +988,7 @@ def cmd_compare_sources(args) -> None:
     )
     errors = validate_region_bounds(region, penghu=False)
     if errors:
-        raise SystemExit(
+        raise InvalidInput(
             "Region out of bounds:\n  " + "\n  ".join(errors)
         )
     outdir = Path(args.output)
@@ -1020,23 +1039,29 @@ def main(argv: list[str] | None = None) -> int:
         func(args)
     except KeyboardInterrupt:
         return 80
+    except InvalidInput as exc:
+        logger.error("%s", exc)
+        return EXIT_INVALID_INPUT
     except SystemExit:  # noqa: PERF203
         raise
     except Exception as exc:  # noqa: BLE001
         logger.error("Fatal: %s", exc, exc_info=True)
-        return 1
-    return 0
+        return EXIT_ERROR
+    return EXIT_OK
 
 
 def _run_make(args) -> int:
     try:
         cmd_make(args)
-        return 0
+        return EXIT_OK
     except KeyboardInterrupt:
         return 80
+    except InvalidInput as exc:
+        logger.error("%s", exc)
+        return EXIT_INVALID_INPUT
     except Exception as exc:  # noqa: BLE001
         logger.error("Fatal: %s", exc, exc_info=True)
-        return 1
+        return EXIT_ERROR
 
 
 if __name__ == "__main__":

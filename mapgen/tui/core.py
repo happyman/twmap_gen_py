@@ -217,7 +217,7 @@ def parse_cli_args(argv: list[str]) -> tuple[MapForm, list[str]]:
     """
     import argparse
 
-    from ..cli import _add_make_args, _parse_region
+    from ..cli import InvalidInput, _add_make_args, _parse_region
 
     argv = list(argv)
     if argv and argv[0] in ("make", "legacy"):
@@ -245,7 +245,7 @@ def parse_cli_args(argv: list[str]) -> tuple[MapForm, list[str]]:
             form.shiftx = region["shiftx"]
             form.shifty = region["shifty"]
             form.datum = region["datum"]
-        except SystemExit:
+        except (SystemExit, InvalidInput):
             errors.append(f"invalid --region {args.region!r}")
 
     def _changed(name: str) -> bool:
