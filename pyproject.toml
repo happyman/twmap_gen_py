@@ -1,6 +1,6 @@
 [project]
 name = "twmap-gen"
-version = "0.2.0"
+version = "0.2.1"
 description = "Taiwan topographic map generator — stitch, crop, and export printable maps"
 requires-python = ">=3.11"
 dependencies = [

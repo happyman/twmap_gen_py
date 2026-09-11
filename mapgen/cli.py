@@ -226,6 +226,7 @@ def _parse_region(spec: str) -> dict:
 
 
 def _region_from_args(args):
+    from .config import validate_region_bounds
     from .proj import Region
 
     spec = args.region
@@ -233,7 +234,7 @@ def _region_from_args(args):
         raise SystemExit("--region/-r is required")
     p = _parse_region(spec)
     # shiftx/shifty are in 1-km units; region spans them
-    return Region(
+    region = Region(
         x0=p["x0"],
         y0=p["y0"],
         x1=p["x0"] + p["shiftx"] * 1000,
@@ -241,6 +242,12 @@ def _region_from_args(args):
         datum=p["datum"],
         penghu=bool(args.penghu),
     )
+    errors = validate_region_bounds(region, penghu=bool(args.penghu))
+    if errors:
+        raise SystemExit(
+            "Region out of bounds:\n  " + "\n  ".join(errors)
+        )
+    return region
 
 
 def cmd_make(args) -> None:
@@ -946,7 +953,7 @@ def _run_full_test(source, args, outdir: Path) -> None:
 def cmd_compare_sources(args) -> None:
     import tempfile
 
-    from .config import get_source
+    from .config import get_source, validate_region_bounds
     from .proj import Region
     from .stitcher import build_base_image
 
@@ -960,6 +967,11 @@ def cmd_compare_sources(args) -> None:
         y1=p["y0"] - p["shifty"] * 1000,
         datum=p["datum"], penghu=False,
     )
+    errors = validate_region_bounds(region, penghu=False)
+    if errors:
+        raise SystemExit(
+            "Region out of bounds:\n  " + "\n  ".join(errors)
+        )
     outdir = Path(args.output)
     outdir.mkdir(parents=True, exist_ok=True)
 

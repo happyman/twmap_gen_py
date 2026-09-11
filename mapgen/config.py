@@ -258,6 +258,36 @@ TAIWAN_BOUNDS = {
     "penghu": {"x": (280, 330), "y": (2500, 2630)},
 }
 
+
+def validate_region_bounds(region, penghu: bool = False) -> list[str]:
+    """Check the full region (NW + SE corners) against TAIWAN_BOUNDS.
+
+    ``region`` must have ``x0``, ``y0``, ``x1``, ``y1`` in **metres** (TWD67
+    or TWD97 — the km-scale bounds are close enough for both datums).
+
+    Returns a list of human-readable error strings; empty means the region is
+    within bounds.
+    """
+    bounds = TAIWAN_BOUNDS["penghu" if penghu else "taiwan"]
+    x_lo, x_hi = bounds["x"]
+    y_lo, y_hi = bounds["y"]
+    errors: list[str] = []
+    corners = [
+        ("startx", region.x0 / 1000.0, True),
+        ("starty", region.y0 / 1000.0, False),
+        ("endx", region.x1 / 1000.0, True),
+        ("endy", region.y1 / 1000.0, False),
+    ]
+    for label, val, is_x in corners:
+        lo, hi = (x_lo, x_hi) if is_x else (y_lo, y_hi)
+        if not lo <= val <= hi:
+            axis = "x" if is_x else "y"
+            errors.append(
+                f"{label}={val:.1f} km outside valid {axis} range {lo}-{hi} km"
+            )
+    return errors
+
+
 # TWD97/67 coordinate systems.
 # TWD97 (EPSG:3826/3825) sits on GRS80, ~a few metres from WGS84, so PROJ's
 # database transforms are correct.
@@ -330,6 +360,7 @@ __all__ = [
     "MAX_CHUNK_PX",
     "PAGE_OVERLAP_PX",
     "TAIWAN_BOUNDS",
+    "validate_region_bounds",
     "CRS_TWD67",
     "CRS_TWD97",
     "CRS_TWD67_PH",
