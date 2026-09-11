@@ -1,4 +1,4 @@
-# twmap-gen — 台灣地形圖產生器
+# twmap-gen — 地圖產生器 CLI 
 
 [中文](#中文) | [English](#english)
 
@@ -10,7 +10,7 @@
 
 ### 功能特色
 
-- 多種地圖來源：魯地圖、經建三、NLSC、堡圖1904/1921、蕃地1916、陸測1924
+- 多種等高線地圖來源：魯地圖、經建三、NLSC、堡圖1904/1921、蕃地1916、陸測1924
 - 輸出格式：PDF（多頁 A4/A3）、KMZ、GeoTIFF
 - GPX 軌跡/航點疊加，支援海拔著色
 - 100m/1000m 格線，標註 TWD97/TWD67 座標
@@ -112,7 +112,7 @@ uv run mapgen list-sources
 
 ### 設定
 
-編輯 `config.toml` 進行自訂：
+編輯 `config.toml` 進行自訂：(一般情況下不需更改)
 
 ```toml
 [picker]
@@ -131,7 +131,7 @@ Download slippy-map tiles from various Taiwan map sources, stitch them into geor
 
 ### Features
 
-- Multiple map sources: 魯地圖 (RudyMap), 經建三, NLSC, 堡圖1904/1921, 蕃地1916, 陸測1924
+- Multiple contour map sources: 魯地圖 (RudyMap), 經建三, NLSC, 堡圖1904/1921, 蕃地1916, 陸測1924
 - Output formats: PDF (multi-page A4/A3), KMZ, GeoTIFF
 - GPX track/waypoint overlay with elevation-colored tracks
 - 100m/1000m grid lines with TWD97/TWD67 coordinate labels
@@ -233,7 +233,7 @@ The backend worker should check exit code `3` and **not** retry the job — noti
 
 ### Configuration
 
-Edit `config.toml` to customise:
+Edit `config.toml` to customize:(normally nothing to change)
 
 ```toml
 [picker]
