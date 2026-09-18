@@ -13,6 +13,7 @@
 - 多種等高線地圖來源：魯地圖、經建三、NLSC、堡圖1904/1921、蕃地1916、陸測1924
 - 輸出格式：PDF（多頁 A4/A3）、KMZ、GeoTIFF
 - GPX 軌跡/航點疊加，支援海拔著色
+- TUI 內建 GPX 檔案選擇器（DirectoryTree），點選即可自動套用範圍與標題
 - 100m/1000m 格線，標註 TWD97/TWD67 座標
 - 灰階與彩色輸出模式
 - 互動式 TUI（終端機介面)
@@ -59,6 +60,8 @@ install.bat         # Windows
 ./mapgen-tui.sh     # Linux / macOS
 mapgen-tui.bat      # Windows
 ```
+
+TUI 啟動後可點選「從 GPX 檔案」按鈕，開啟檔案選擇器選取 `.gpx` 檔案，自動套用範圍、標題與設定。
 
 **命令列：**
 
@@ -134,6 +137,7 @@ Download slippy-map tiles from various Taiwan map sources, stitch them into geor
 - Multiple contour map sources: 魯地圖 (RudyMap), 經建三, NLSC, 堡圖1904/1921, 蕃地1916, 陸測1924
 - Output formats: PDF (multi-page A4/A3), KMZ, GeoTIFF
 - GPX track/waypoint overlay with elevation-colored tracks
+- Built-in GPX file picker in TUI — select a file to auto-fill region and title
 - 100m/1000m grid lines with TWD97/TWD67 coordinate labels
 - Grayscale and color output modes
 - Interactive TUI (terminal UI) and desktop UI
@@ -180,6 +184,8 @@ install.bat         # Windows
 ./mapgen-tui.sh     # Linux / macOS
 mapgen-tui.bat      # Windows
 ```
+
+Click the "從 GPX 檔案" button to open the file picker, select a `.gpx` file to auto-fill the region, title, and settings.
 
 **Command line:**
 
