@@ -8,7 +8,12 @@ keys are read once per process and cached.
 from __future__ import annotations
 
 import sys
-import tomllib
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover
+    import tomli as tomllib  # type: ignore[assignment]
+
 from pathlib import Path
 
 _CONFIG_NAME = "config.toml"

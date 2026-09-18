@@ -34,6 +34,7 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import (
     Button,
     Checkbox,
+    DirectoryTree,
     Footer,
     Input,
     Label,
@@ -61,6 +62,91 @@ from .map_picker import pick as pick_from_map
 from .map_picker import stop as stop_picker
 
 SOURCE_LABELS = {k: f"{k} — {src.label}" for k, src in list_sources()}
+
+
+class GpxFilePickerScreen(ModalScreen[str | None]):
+    """Modal file picker for selecting a GPX file."""
+
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+    ]
+
+    CSS = """
+    GpxFilePickerScreen {
+        align: center middle;
+    }
+    GpxFilePickerScreen #picker-box {
+        width: 92%;
+        max-width: 92;
+        height: 85%;
+        border: heavy $accent;
+        background: $panel;
+        padding: 1 2;
+    }
+    GpxFilePickerScreen .title {
+        text-style: bold;
+        color: $accent;
+        margin-bottom: 1;
+    }
+    GpxFilePickerScreen #file-tree {
+        height: 1fr;
+        border: round $primary;
+        margin-bottom: 1;
+    }
+    GpxFilePickerScreen .actions {
+        height: 3;
+        align-horizontal: right;
+    }
+    GpxFilePickerScreen Button {
+        margin-left: 1;
+        width: 18;
+    }
+    """
+
+    def __init__(self, start_path: str = ".") -> None:
+        super().__init__()
+        self._start_path = start_path
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="picker-box"):
+            yield Label("選擇 GPX 檔案 | Select GPX File", classes="title")
+            yield DirectoryTree(self._start_path, id="file-tree")
+            yield Static("[dim]↑↓ 導覽 | Enter 選擇 | Esc 取消[/dim]")
+            yield Horizontal(
+                Button("取消", id="pick-cancel"),
+                Button("選擇", id="pick-ok", variant="primary"),
+                classes="actions",
+            )
+
+    def on_directory_tree_file_selected(
+        self, event: DirectoryTree.FileSelected
+    ) -> None:
+        path = str(event.path)
+        if path.lower().endswith(".gpx"):
+            self.dismiss(path)
+        else:
+            self.notify("請選擇 .gpx 檔案", severity="warning")
+
+    def on_directory_tree_fileHighlighted(
+        self, event: DirectoryTree.FileHighlighted
+    ) -> None:
+        path = str(event.path)
+        self.query_one("#pick-ok", Button).disabled = not path.lower().endswith(".gpx")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if event.button.id == "pick-cancel":
+            self.dismiss(None)
+        elif event.button.id == "pick-ok":
+            tree = self.query_one("#file-tree", DirectoryTree)
+            highlighted = tree.cursor_node
+            if highlighted is not None:
+                path = str(highlighted.data.path) if hasattr(highlighted, 'data') and hasattr(highlighted.data, 'path') else None
+                if path and path.lower().endswith(".gpx"):
+                    self.dismiss(path)
 
 
 def _cmd_text(argv: list[str]) -> str:
@@ -508,6 +594,16 @@ class MapGenApp(App[None]):
                         id="map-type",
                     )
                     yield Button("從地圖選擇範圍", id="pick-map", variant="primary")
+                yield Button("從 GPX 檔案", id="from-gpx-file", variant="default")
+
+            with Horizontal(id="gpx-file-row", classes="row"):
+                yield Label("GPX 檔案", classes="label")
+                yield Input(
+                    self._form.gpx or "",
+                    id="gpx-path",
+                    placeholder="輸入 GPX 檔案路徑",
+                    disabled=bool(self._form.gpx),
+                )
 
             if self._region_locked:
                 yield Label("行跡資訊 | Input GPX", classes="section")
@@ -515,12 +611,12 @@ class MapGenApp(App[None]):
                 with Horizontal(id="gpxflags", classes="row chkrow"):
                     yield Checkbox(
                         "航跡標記 label_trk",
-                        value=self._form.label_trk > 0,
+                        value=False,
                         id="label-trk",
                     )
                     yield Checkbox(
                         "航點標記 label_wpt",
-                        value=self._form.label_wpt > 0,
+                        value=False,
                         id="label-wpt",
                     )
             else:
@@ -633,10 +729,12 @@ class MapGenApp(App[None]):
             datum = "TWD97" if self.query_one("#twd97", Checkbox).value else "TWD67"
             penghu = self.query_one("#area", Select).value == "penghu"
 
-        label_trk = self.query_one("#label-trk", Checkbox).value if (
-            self._region_locked) else self._form.label_trk > 0
-        label_wpt = self.query_one("#label-wpt", Checkbox).value if (
-            self._region_locked) else self._form.label_wpt > 0
+        if self._region_locked:
+            label_trk = self.query_one("#label-trk", Checkbox).value
+            label_wpt = self.query_one("#label-wpt", Checkbox).value
+        else:
+            label_trk = self._form.label_trk > 0
+            label_wpt = self._form.label_wpt > 0
 
         dims = [d for d in EXTRA_DIMS
                 if self.query_one(f"#d{d}", Checkbox).value]
@@ -716,6 +814,8 @@ class MapGenApp(App[None]):
             self.action_quit()
         elif button_id == "pick-map":
             self._launch_picker()
+        elif button_id == "from-gpx-file":
+            self._from_gpx_file()
 
     def _launch_picker(self) -> None:
         """Open the map picker in a browser, then fill the form on return."""
@@ -762,6 +862,70 @@ class MapGenApp(App[None]):
             self.query_one("#area", Select).value = "penghu" if self._form.penghu else "taiwan"
         except Exception:
             pass  # region_locked or widget not present
+
+    def _from_gpx_file(self) -> None:
+        """Open GPX file picker modal, then pre-fill the form from the selected GPX."""
+        import os
+        start_path = os.path.expanduser(os.getcwd())
+        self.push_screen(GpxFilePickerScreen(start_path), self._on_gpx_file_picked)
+
+    def _on_gpx_file_picked(self, gpx_path: str | None) -> None:
+        if gpx_path is None:
+            return
+        try:
+            from ..gpx_region import region_from_gpx
+            reg = region_from_gpx(gpx_path, datum="TWD67")
+            self._form.gpx = gpx_path
+            self._form.label_trk = 0
+            self._form.label_wpt = 0
+            self._form.startx = reg.x0 / 1000.0
+            self._form.starty = reg.y0 / 1000.0
+            self._form.shiftx = reg.shiftx
+            self._form.shifty = reg.shifty
+            self._form.datum = reg.datum
+            self._form.penghu = reg.penghu
+            self._form.title = reg.title
+            self._region_locked = True
+            self._gpx_reg = reg
+            try:
+                self.query_one("#gpx-path", Input).value = gpx_path
+                self.query_one("#gpx-path", Input).disabled = True
+            except Exception:
+                pass
+            try:
+                self.query_one("#coord1").display = False
+                self.query_one("#coord2").display = False
+            except Exception:
+                pass
+            try:
+                self.query_one("#pick-map").display = False
+            except Exception:
+                pass
+            self.screen.mount(
+                Label("行跡資訊 | Input GPX", classes="section"),
+                Static(_gpx_info_text(reg), id="gpx-info"),
+                Horizontal(
+                    Checkbox(
+                        "航跡標記 label_trk",
+                        value=False,
+                        id="label-trk",
+                    ),
+                    Checkbox(
+                        "航點標記 label_wpt",
+                        value=False,
+                        id="label-wpt",
+                    ),
+                    id="gpxflags",
+                    classes="row chkrow",
+                ),
+                after=self.query_one("#gpx-file-row"),
+            )
+            self.notify("已從 GPX 檔案套用設定", severity="information")
+            self._refresh_preview()
+        except ValueError as exc:
+            self.notify(f"無效的 GPX 檔案: {exc}", severity="error")
+        except Exception as exc:
+            self.notify(f"載入 GPX 檔案時發生錯誤: {exc}", severity="error")
 
     def action_run(self) -> None:
         """Run the previewed command (bound to the Run button and ctrl+r).
