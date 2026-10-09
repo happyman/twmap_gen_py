@@ -29,13 +29,9 @@ def kml_groundoverlay(
     wgs84_bounds: tuple[float, float, float, float],
     image_file: str,
 ) -> str:
-    """Build a single KML GroundOverlay document."""
+    """Build a single ``<GroundOverlay>`` fragment for ``doc.kml``."""
     minlon, minlat, maxlon, maxlat = wgs84_bounds
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<kml xmlns="http://www.opengis.net/kml/2.2">
-  <Document>
-    <name>{name}</name>
-    <GroundOverlay>
+    return f"""    <GroundOverlay>
       <name>{name}</name>
       <Icon>
         <href>{image_file}</href>
@@ -46,10 +42,13 @@ def kml_groundoverlay(
         <east>{maxlon}</east>
         <west>{minlon}</west>
       </LatLonBox>
-    </GroundOverlay>
-  </Document>
-</kml>
-"""
+    </GroundOverlay>"""
+
+
+def kmz_grid(img_w: int, img_h: int, px_per_km: float) -> tuple[int, int]:
+    """Number of (cols, rows) of ``TILE_KM`` tiles covering an image."""
+    tile_px = int(TILE_KM * px_per_km)
+    return max(1, -(-img_w // tile_px)), max(1, -(-img_h // tile_px))
 
 
 def crop_3km_tiles(
@@ -67,8 +66,7 @@ def crop_3km_tiles(
     img_h, img_w = img.shape[:2]
 
     # How many tiles in each direction
-    cols = max(1, -(-img_w // tile_px))
-    rows = max(1, -(-img_h // tile_px))
+    cols, rows = kmz_grid(img_w, img_h, px_per_km)
 
     for r in range(rows):
         for c in range(cols):
@@ -105,23 +103,31 @@ def write_kmz(
     """Crop the image to 3km tiles, write KML + zipped tiles to a KMZ file."""
     out = Path(out_path)
     tiles = crop_3km_tiles(img, region, px_per_km)
+    cols, rows = kmz_grid(img.shape[1], img.shape[0], px_per_km)
 
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
-        doc_files = []
-        for i, (tile, name, bounds) in enumerate(tiles):
+        overlays = []
+        for tile, name, bounds in tiles:
             tile_path = f"{name}.jpg"
             zf.writestr(tile_path, _encode_jpeg(tile))
-            kml_name = f"{name}.kml"
-            zf.writestr(
-                kml_name,
-                kml_groundoverlay(name, bounds, tile_path),
-            )
-            doc_files.append(kml_name)
+            overlays.append(kml_groundoverlay(name, bounds, tile_path))
 
-        # A single root doc.kml referencing all tiles is appended last as resource
-        zf.writestr("doc.kml", _doc_kml(doc_title, doc_files))
+        # One root doc.kml with every GroundOverlay inline. Viewers (Google
+        # Earth) and Garmin devices read only doc.kml — a NetworkLink or
+        # per-tile KML files would leave most tiles unloaded.
+        zf.writestr("doc.kml", _doc_kml(doc_title, overlays))
 
-    logger.info("Wrote %s (%d tiles)", out, len(tiles))
+    logger.info(
+        "Wrote %s (%d tiles: %dx%d grid covering %.1fx%.1f km; region %.1fx%.1f km)",
+        out,
+        len(tiles),
+        cols,
+        rows,
+        cols * TILE_KM,
+        rows * TILE_KM,
+        region.width_m / 1000.0,
+        region.height_m / 1000.0,
+    )
     return out
 
 
@@ -136,20 +142,22 @@ def _encode_jpeg(arr: np.ndarray) -> bytes:
     return buf.getvalue()
 
 
-def _doc_kml(title: str, tile_kmls: Sequence[str]) -> str:
-    """Build a root KML that includes the per-tile overlays."""
-    entries = "\n".join(f'    <link><href>{k}</href></link>' for k in tile_kmls)
+def _doc_kml(title: str, overlays: Sequence[str]) -> str:
+    """Build the root KML with every tile's GroundOverlay inline.
+
+    Matches the PHP original (``GarminKmz::kml_head/kml_folder``): no
+    NetworkLink, no per-tile KML files — Garmin devices and Google Earth
+    only process ``doc.kml``.
+    """
+    entries = "\n".join(overlays)
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
   <Document>
     <name>{title}</name>
-    <NetworkLink>
-      <name>Tiles</name>
 {entries}
-    </NetworkLink>
   </Document>
 </kml>
 """
 
 
-__all__ = ["crop_3km_tiles", "write_kmz", "kml_groundoverlay"]
+__all__ = ["crop_3km_tiles", "write_kmz", "kml_groundoverlay", "kmz_grid"]

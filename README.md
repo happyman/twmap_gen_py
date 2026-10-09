@@ -12,6 +12,7 @@
 
 - 多種等高線地圖來源：魯地圖、經建三、NLSC、堡圖1904/1921、蕃地1916、陸測1924
 - 輸出格式：PDF（多頁 A4/A3）、KMZ、GeoTIFF
+  - KMZ 圖磚固定 3×3 km，格數以 3km 向上取整涵蓋整個範圍（與列印頁面尺寸無關，例如 3×4 km 範圍會輸出 1×2 塊：3×3 全塊 + 3×1 長條）
 - GPX 軌跡/航點疊加，支援海拔著色
 - TUI 內建 GPX 檔案選擇器（DirectoryTree），點選即可自動套用範圍與標題
 - 100m/1000m 格線，標註 TWD97/TWD67 座標
@@ -136,6 +137,7 @@ Download slippy-map tiles from various Taiwan map sources, stitch them into geor
 
 - Multiple contour map sources: 魯地圖 (RudyMap), 經建三, NLSC, 堡圖1904/1921, 蕃地1916, 陸測1924
 - Output formats: PDF (multi-page A4/A3), KMZ, GeoTIFF
+  - KMZ tiles are a fixed 3×3 km grid rounded up to cover the whole region (independent of the print page dimension: a 3×4 km region yields 1×2 tiles — a full 3×3 plus a 3×1 strip)
 - GPX track/waypoint overlay with elevation-colored tracks
 - Built-in GPX file picker in TUI — select a file to auto-fill region and title
 - 100m/1000m grid lines with TWD97/TWD67 coordinate labels
