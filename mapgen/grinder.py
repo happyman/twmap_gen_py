@@ -395,7 +395,7 @@ def optimize_png(path: Path, pngquant: str | None = None) -> None:
     if not pngquant:
         logger.info("pngquant not found, skipping PNG optimization")
         return
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(dir=str(path.parent)) as td:
         out = Path(td) / "opt.png"
         try:
             subprocess.run(
