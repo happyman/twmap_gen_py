@@ -981,12 +981,25 @@ def _download_one(url: str, dest: Path) -> None:
     """Download a single tile to ``dest/tile.png`` (dest is a directory)."""
     import urllib.request
 
+    from .proxy import pac_enabled, proxy_for_url
+
     dest.mkdir(parents=True, exist_ok=True)
     fname = dest / "tile.png"
     req = urllib.request.Request(
         url, headers={"User-Agent": "twmap-gen/0.1"}
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    proxy = proxy_for_url(url)
+    if proxy is None and not pac_enabled():
+        # No PAC at all: keep the historical behaviour (env proxies).
+        resp_ctx = urllib.request.urlopen(req, timeout=30)
+    else:
+        # PAC present: it decides — proxy URL, or an empty ProxyHandler to
+        # force direct when the PAC says DIRECT (bypass), even if HTTP_PROXY
+        # & friends are set in the environment.
+        proxies = {} if proxy is None else {"http": proxy, "https": proxy}
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxies))
+        resp_ctx = opener.open(req, timeout=30)
+    with resp_ctx as resp:
         data = resp.read()
     fname.write_bytes(data)
 

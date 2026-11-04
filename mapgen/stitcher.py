@@ -73,10 +73,21 @@ async def download_tiles(
 
     import aiohttp
 
+    from .proxy import pac_enabled, proxy_for_url
+
     opts = opts or DownloadOptions()
     dest.mkdir(parents=True, exist_ok=True)
     sem = asyncio.Semaphore(opts.max_concurrent)
     headers = {"User-Agent": opts.user_agent}
+    # PAC discovery and FindProxyForURL() evaluation are blocking (network +
+    # dukpy), so warm every tile host up front — before gather() — and let the
+    # per-tile path below hit the per-host cache only.
+    for warm_url, _wx, _wy in urls:
+        proxy_for_url(warm_url)
+    # With a PAC present, turn trust_env off: proxy=None must then mean a PAC
+    # "DIRECT" (truly direct), not "go look at the proxy env vars". Without a
+    # PAC, keep the historical behaviour of honouring HTTP_PROXY & friends.
+    trust_env = not pac_enabled()
     total = len(urls)
     done = 0
     done_lock = asyncio.Lock()
@@ -94,12 +105,17 @@ async def download_tiles(
                 done += 1
             report()
             return
+        proxy = proxy_for_url(url)
         for attempt in range(opts.retries):
             try:
                 async with sem:
-                    async with aiohttp.ClientSession(headers=headers) as session:
+                    async with aiohttp.ClientSession(
+                        headers=headers, trust_env=trust_env
+                    ) as session:
                         async with session.get(
-                            url, timeout=aiohttp.ClientTimeout(total=opts.timeout)
+                            url,
+                            timeout=aiohttp.ClientTimeout(total=opts.timeout),
+                            proxy=proxy,
                         ) as resp:
                             resp.raise_for_status()
                             data = await resp.read()
