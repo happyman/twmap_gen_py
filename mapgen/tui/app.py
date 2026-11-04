@@ -144,7 +144,11 @@ class GpxFilePickerScreen(ModalScreen[str | None]):
             tree = self.query_one("#file-tree", DirectoryTree)
             highlighted = tree.cursor_node
             if highlighted is not None:
-                path = str(highlighted.data.path) if hasattr(highlighted, 'data') and hasattr(highlighted.data, 'path') else None
+                path = (
+                    str(highlighted.data.path)
+                    if hasattr(highlighted, 'data') and hasattr(highlighted.data, 'path')
+                    else None
+                )
                 if path and path.lower().endswith(".gpx"):
                     self.dismiss(path)
 
