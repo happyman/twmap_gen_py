@@ -94,7 +94,9 @@ def proxy_for_url(url: str) -> str | None:
         )
         proxy = None
     else:
-        logger.debug("PAC: %s -> %s", host, proxy)
+        # INFO so it shows during a normal generation run (once per host,
+        # thanks to the cache — not once per tile).
+        logger.info("Using proxy %s for %s", proxy, host)
     with _lock:
         _cache[host] = proxy
     return proxy
